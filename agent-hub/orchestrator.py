@@ -63,6 +63,9 @@ class Orchestrator:
                     config = json.load(f)
                 name = config.get("name", os.path.basename(config_file).replace(".json", ""))
                 config["name"] = name
+                if config.get("enabled") is False:
+                    logger.info(f"Skipping disabled agent: {name}")
+                    continue
                 agent = AgentThread(config)
                 self.agents[name] = agent
                 self.agent_configs.append(config)

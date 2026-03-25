@@ -237,10 +237,14 @@ export class GmailChannel implements Channel {
         await this.processMessage(stub.id);
       }
 
-      // Cap processed ID set to prevent unbounded growth
+      // Cap sets to prevent unbounded growth
       if (this.processedIds.size > 5000) {
         const ids = [...this.processedIds];
         this.processedIds = new Set(ids.slice(ids.length - 2500));
+      }
+      if (this.threadMeta.size > 1000) {
+        const entries = [...this.threadMeta.entries()];
+        this.threadMeta = new Map(entries.slice(entries.length - 500));
       }
 
       this.consecutiveErrors = 0;

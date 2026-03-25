@@ -5,7 +5,6 @@ import {
   ASSISTANT_NAME,
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
-  POLL_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -32,7 +31,6 @@ import {
   getAllSessions,
   getAllTasks,
   getMessagesSince,
-  getNewMessages,
   getRegisteredGroup,
   getRouterState,
   initDatabase,
@@ -52,6 +50,13 @@ import {
   stopRemoteControl,
 } from './remote-control.js';
 import {
+  isRateLimitError,
+  markErrorNotified,
+  resetErrorCooldown,
+  shouldNotifyError,
+} from './anti-spam.js';
+import { startMessageLoop } from './message-loop.js';
+import {
   isSenderAllowed,
   isTriggerAllowed,
   loadSenderAllowlist,
@@ -68,40 +73,9 @@ let lastTimestamp = '';
 let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
-let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
-
-// Anti-spam: rate-limit error cooldown (4h between notifications per JID)
-const ERROR_COOLDOWN_MS = 4 * 60 * 60 * 1000;
-const lastErrorNotifiedAt: Record<string, number> = {};
-const RATE_LIMIT_PATTERNS = [
-  'hit your limit',
-  'rate limit',
-  'rate_limit',
-  'overloaded',
-  '429',
-];
-
-function isRateLimitError(text: string): boolean {
-  const lower = text.toLowerCase();
-  return RATE_LIMIT_PATTERNS.some((p) => lower.includes(p));
-}
-
-function shouldNotifyError(chatJid: string): boolean {
-  const last = lastErrorNotifiedAt[chatJid];
-  if (!last) return true;
-  return Date.now() - last >= ERROR_COOLDOWN_MS;
-}
-
-function markErrorNotified(chatJid: string): void {
-  lastErrorNotifiedAt[chatJid] = Date.now();
-}
-
-function resetErrorCooldown(chatJid: string): void {
-  delete lastErrorNotifiedAt[chatJid];
-}
 
 function loadState(): void {
   lastTimestamp = getRouterState('last_timestamp') || '';
@@ -395,105 +369,19 @@ async function runAgent(
   }
 }
 
-async function startMessageLoop(): Promise<void> {
-  if (messageLoopRunning) {
-    logger.debug('Message loop already running, skipping duplicate start');
-    return;
-  }
-  messageLoopRunning = true;
-
-  logger.info(`NanoClaw running (trigger: @${ASSISTANT_NAME})`);
-
-  while (true) {
-    try {
-      const jids = Object.keys(registeredGroups);
-      const { messages, newTimestamp } = getNewMessages(
-        jids,
-        lastTimestamp,
-        ASSISTANT_NAME,
-      );
-
-      if (messages.length > 0) {
-        logger.info({ count: messages.length }, 'New messages');
-
-        // Advance the "seen" cursor for all messages immediately
-        lastTimestamp = newTimestamp;
-        saveState();
-
-        // Deduplicate by group
-        const messagesByGroup = new Map<string, NewMessage[]>();
-        for (const msg of messages) {
-          const existing = messagesByGroup.get(msg.chat_jid);
-          if (existing) {
-            existing.push(msg);
-          } else {
-            messagesByGroup.set(msg.chat_jid, [msg]);
-          }
-        }
-
-        for (const [chatJid, groupMessages] of messagesByGroup) {
-          const group = registeredGroups[chatJid];
-          if (!group) continue;
-
-          const channel = findChannel(channels, chatJid);
-          if (!channel) {
-            logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
-            continue;
-          }
-
-          const isMainGroup = group.isMain === true;
-          const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
-
-          // For non-main groups, only act on trigger messages.
-          // Non-trigger messages accumulate in DB and get pulled as
-          // context when a trigger eventually arrives.
-          if (needsTrigger) {
-            const allowlistCfg = loadSenderAllowlist();
-            const hasTrigger = groupMessages.some(
-              (m) =>
-                TRIGGER_PATTERN.test(m.content.trim()) &&
-                (m.is_from_me ||
-                  isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
-            );
-            if (!hasTrigger) continue;
-          }
-
-          // Pull all messages since lastAgentTimestamp so non-trigger
-          // context that accumulated between triggers is included.
-          const allPending = getMessagesSince(
-            chatJid,
-            lastAgentTimestamp[chatJid] || '',
-            ASSISTANT_NAME,
-          );
-          const messagesToSend =
-            allPending.length > 0 ? allPending : groupMessages;
-          const formatted = formatMessages(messagesToSend, TIMEZONE);
-
-          if (queue.sendMessage(chatJid, formatted)) {
-            logger.debug(
-              { chatJid, count: messagesToSend.length },
-              'Piped messages to active container',
-            );
-            lastAgentTimestamp[chatJid] =
-              messagesToSend[messagesToSend.length - 1].timestamp;
-            saveState();
-            // Show typing indicator while the container processes the piped message
-            channel
-              .setTyping?.(chatJid, true)
-              ?.catch((err) =>
-                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
-              );
-          } else {
-            // No active container — enqueue for a new one
-            queue.enqueueMessageCheck(chatJid);
-          }
-        }
-      }
-    } catch (err) {
-      logger.error({ err }, 'Error in message loop');
-    }
-    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL));
-  }
+function createMessageLoopDeps() {
+  return {
+    channels,
+    queue,
+    getRegisteredGroups: () => registeredGroups,
+    getLastTimestamp: () => lastTimestamp,
+    setLastTimestamp: (ts: string) => { lastTimestamp = ts; },
+    getLastAgentTimestamp: () => lastAgentTimestamp,
+    setLastAgentTimestamp: (chatJid: string, ts: string) => {
+      lastAgentTimestamp[chatJid] = ts;
+    },
+    saveState,
+  };
 }
 
 /**
@@ -684,7 +572,7 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
-  startMessageLoop().catch((err) => {
+  startMessageLoop(createMessageLoopDeps()).catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
   });

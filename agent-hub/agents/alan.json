@@ -1,5 +1,6 @@
 {
   "name": "alan",
+  "enabled": false,
   "display_name": "Alan Reblot",
   "gws_accounts": ["alan@bestoftours.co.uk"],
   "gws_config_dir": "/Users/boty/.config/gws/accounts/alan",

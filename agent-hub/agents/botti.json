@@ -4,7 +4,7 @@
   "gws_accounts": ["sam@bestoftours.co.uk"],
   "gws_config_dir": "/Users/boty/.config/gws/accounts/sam",
   "api_provider": "anthropic",
-  "model": "claude-sonnet-4-6",
+  "model": "claude-opus-4-6",
   "triage_model": "gemini-2.5-flash",
   "external_comms": "supervised",
   "internal_domains": ["@bestoftours.co.uk", "@botler360.com"],

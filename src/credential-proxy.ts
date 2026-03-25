@@ -21,7 +21,10 @@ import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 
 // --- Daily spend tracking ---
-const DAILY_LIMIT_USD = parseFloat(process.env.DAILY_API_LIMIT_USD || '20');
+const DAILY_LIMIT_USD = (() => {
+  const parsed = parseFloat(process.env.DAILY_API_LIMIT_USD || '20');
+  return Number.isNaN(parsed) ? 20 : parsed;
+})();
 const COST_STATE_FILE = path.join(process.cwd(), 'store', 'daily-spend.json');
 
 interface DailySpend {
@@ -32,24 +35,38 @@ interface DailySpend {
   limit_hit: boolean;
 }
 
+// In-memory cache — avoids disk reads on every API request
+let spendCache: DailySpend | null = null;
+
 function loadDailySpend(): DailySpend {
   const today = new Date().toISOString().slice(0, 10);
+
+  // Return cache if same day
+  if (spendCache && spendCache.date === today) return spendCache;
+
+  // Try loading from disk
   try {
     const data = JSON.parse(fs.readFileSync(COST_STATE_FILE, 'utf-8'));
-    if (data.date === today) return data;
+    if (data.date === today) {
+      spendCache = data;
+      return data;
+    }
   } catch {
     /* first run or new day */
   }
-  return {
+
+  spendCache = {
     date: today,
     input_tokens: 0,
     output_tokens: 0,
     estimated_usd: 0,
     limit_hit: false,
   };
+  return spendCache;
 }
 
 function saveDailySpend(spend: DailySpend): void {
+  spendCache = spend;
   try {
     fs.mkdirSync(path.dirname(COST_STATE_FILE), { recursive: true });
     fs.writeFileSync(COST_STATE_FILE, JSON.stringify(spend, null, 2));

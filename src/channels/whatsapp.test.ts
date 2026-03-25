@@ -35,6 +35,12 @@ vi.mock('../transcription.js', () => ({
     .mockResolvedValue('Hello this is a voice message'),
 }));
 
+// Mock media-download
+vi.mock('../media-download.js', () => ({
+  isMediaMessage: vi.fn((msg: any) => !!(msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.documentMessage)),
+  downloadAndSaveMedia: vi.fn().mockResolvedValue('/tmp/media/test-image.jpg'),
+}));
+
 // Mock fs
 vi.mock('fs', async () => {
   const actual = await vi.importActual<typeof import('fs')>('fs');
@@ -50,7 +56,7 @@ vi.mock('fs', async () => {
 
 // Mock child_process (used for osascript notification)
 vi.mock('child_process', () => ({
-  exec: vi.fn(),
+  execFile: vi.fn(),
 }));
 
 // Build a fake WASocket that's an EventEmitter with the methods we need
@@ -481,7 +487,7 @@ describe('WhatsAppChannel', () => {
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'registered@g.us',
-        expect.objectContaining({ content: 'Check this photo' }),
+        expect.objectContaining({ content: '[Image: /tmp/media/test-image.jpg]\nCheck this photo' }),
       );
     });
 
