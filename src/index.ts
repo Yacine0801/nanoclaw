@@ -256,11 +256,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       // Anti-spam: intercept rate-limit errors
       if (text && isRateLimitError(text)) {
         if (shouldNotifyError(chatJid)) {
-          await channel.sendMessage(chatJid, '\u23f8\ufe0f Je suis temporairement indisponible. Je reviens d\u00e8s que possible.');
+          await channel.sendMessage(
+            chatJid,
+            '\u23f8\ufe0f Je suis temporairement indisponible. Je reviens d\u00e8s que possible.',
+          );
           markErrorNotified(chatJid);
           outputSentToUser = true;
         } else {
-          logger.warn({ group: group.name, chatJid }, 'Rate limit error suppressed (cooldown active)');
+          logger.warn(
+            { group: group.name, chatJid },
+            'Rate limit error suppressed (cooldown active)',
+          );
         }
         hadError = true;
       } else if (text) {

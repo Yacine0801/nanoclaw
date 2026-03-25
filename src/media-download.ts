@@ -1,7 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 
-import { downloadMediaMessage, WAMessage, WASocket } from '@whiskeysockets/baileys';
+import {
+  downloadMediaMessage,
+  WAMessage,
+  WASocket,
+} from '@whiskeysockets/baileys';
 
 import { STORE_DIR } from './config.js';
 import { logger } from './logger.js';
@@ -14,7 +18,8 @@ const MIME_EXT: Record<string, string> = {
   'image/webp': '.webp',
   'image/gif': '.gif',
   'application/pdf': '.pdf',
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': '.docx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    '.docx',
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': '.xlsx',
   'text/plain': '.txt',
 };

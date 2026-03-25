@@ -48,7 +48,8 @@ export class GmailChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    const credDir = process.env.GMAIL_MCP_DIR || path.join(os.homedir(), '.gmail-mcp');
+    const credDir =
+      process.env.GMAIL_MCP_DIR || path.join(os.homedir(), '.gmail-mcp');
     const keysPath = path.join(credDir, 'gcp-oauth.keys.json');
     const tokensPath = path.join(credDir, 'credentials.json');
 
@@ -92,9 +93,13 @@ export class GmailChannel implements Channel {
 
     // Start polling with error backoff
     const schedulePoll = () => {
-      const backoffMs = this.consecutiveErrors > 0
-        ? Math.min(this.pollIntervalMs * Math.pow(2, this.consecutiveErrors), 30 * 60 * 1000)
-        : this.pollIntervalMs;
+      const backoffMs =
+        this.consecutiveErrors > 0
+          ? Math.min(
+              this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+              30 * 60 * 1000,
+            )
+          : this.pollIntervalMs;
       this.pollTimer = setTimeout(() => {
         this.pollForMessages()
           .catch((err) => logger.error({ err }, 'Gmail poll error'))
@@ -127,7 +132,10 @@ export class GmailChannel implements Channel {
       if (replyMatch) {
         const target = replyMatch[1].toLowerCase().trim();
         for (const [tid, m] of this.threadMeta) {
-          if (m.sender.toLowerCase().includes(target) || m.senderName.toLowerCase().includes(target)) {
+          if (
+            m.sender.toLowerCase().includes(target) ||
+            m.senderName.toLowerCase().includes(target)
+          ) {
             threadId = tid;
             meta = m;
             text = text.replace(/\[Reply to:\s*.+?\]\s*/i, '').trim();
@@ -143,7 +151,10 @@ export class GmailChannel implements Channel {
     }
 
     if (!meta) {
-      logger.warn({ jid, threadId }, 'No thread metadata for reply, cannot send');
+      logger.warn(
+        { jid, threadId },
+        'No thread metadata for reply, cannot send',
+      );
       return;
     }
 
@@ -235,8 +246,18 @@ export class GmailChannel implements Channel {
       this.consecutiveErrors = 0;
     } catch (err) {
       this.consecutiveErrors++;
-      const backoffMs = Math.min(this.pollIntervalMs * Math.pow(2, this.consecutiveErrors), 30 * 60 * 1000);
-      logger.error({ err, consecutiveErrors: this.consecutiveErrors, nextPollMs: backoffMs }, 'Gmail poll failed');
+      const backoffMs = Math.min(
+        this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+        30 * 60 * 1000,
+      );
+      logger.error(
+        {
+          err,
+          consecutiveErrors: this.consecutiveErrors,
+          nextPollMs: backoffMs,
+        },
+        'Gmail poll failed',
+      );
     }
   }
 
@@ -293,9 +314,7 @@ export class GmailChannel implements Channel {
 
     // Find the main group to deliver the email notification
     const groups = this.opts.registeredGroups();
-    const mainEntry = Object.entries(groups).find(
-      ([, g]) => g.isMain === true,
-    );
+    const mainEntry = Object.entries(groups).find(([, g]) => g.isMain === true);
 
     if (!mainEntry) {
       logger.debug(

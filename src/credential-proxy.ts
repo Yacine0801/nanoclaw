@@ -14,8 +14,88 @@ import { createServer, Server } from 'http';
 import { request as httpsRequest } from 'https';
 import { request as httpRequest, RequestOptions } from 'http';
 
+import fs from 'fs';
+import path from 'path';
+
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+
+// --- Daily spend tracking ---
+const DAILY_LIMIT_USD = parseFloat(process.env.DAILY_API_LIMIT_USD || '20');
+const COST_STATE_FILE = path.join(process.cwd(), 'store', 'daily-spend.json');
+
+interface DailySpend {
+  date: string;
+  input_tokens: number;
+  output_tokens: number;
+  estimated_usd: number;
+  limit_hit: boolean;
+}
+
+function loadDailySpend(): DailySpend {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    const data = JSON.parse(fs.readFileSync(COST_STATE_FILE, 'utf-8'));
+    if (data.date === today) return data;
+  } catch {
+    /* first run or new day */
+  }
+  return {
+    date: today,
+    input_tokens: 0,
+    output_tokens: 0,
+    estimated_usd: 0,
+    limit_hit: false,
+  };
+}
+
+function saveDailySpend(spend: DailySpend): void {
+  try {
+    fs.mkdirSync(path.dirname(COST_STATE_FILE), { recursive: true });
+    fs.writeFileSync(COST_STATE_FILE, JSON.stringify(spend, null, 2));
+  } catch {
+    /* best effort */
+  }
+}
+
+// Approximate costs per 1M tokens (Sonnet 4.6 / Opus 4.6 blended estimate)
+const INPUT_COST_PER_M = 3.0; // $3/MTok input (blended)
+const OUTPUT_COST_PER_M = 15.0; // $15/MTok output (blended)
+
+function trackUsage(responseBody: string): void {
+  try {
+    const data = JSON.parse(responseBody);
+    const usage = data?.usage;
+    if (!usage) return;
+
+    const spend = loadDailySpend();
+    const inputTokens = usage.input_tokens || 0;
+    const outputTokens = usage.output_tokens || 0;
+
+    spend.input_tokens += inputTokens;
+    spend.output_tokens += outputTokens;
+    spend.estimated_usd =
+      (spend.input_tokens / 1_000_000) * INPUT_COST_PER_M +
+      (spend.output_tokens / 1_000_000) * OUTPUT_COST_PER_M;
+
+    if (spend.estimated_usd >= DAILY_LIMIT_USD && !spend.limit_hit) {
+      spend.limit_hit = true;
+      logger.error(
+        { estimated_usd: spend.estimated_usd, limit: DAILY_LIMIT_USD },
+        'DAILY API SPEND LIMIT HIT',
+      );
+    }
+
+    saveDailySpend(spend);
+  } catch {
+    /* non-JSON response, ignore */
+  }
+}
+
+function isDailyLimitHit(): boolean {
+  const spend = loadDailySpend();
+  return spend.limit_hit;
+}
 
 export type AuthMode = 'api-key' | 'oauth';
 
@@ -50,6 +130,27 @@ export function startCredentialProxy(
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
         const body = Buffer.concat(chunks);
+
+        // Block requests when daily spend limit is reached
+        if (isDailyLimitHit() && req.url?.includes('/messages')) {
+          const spend = loadDailySpend();
+          logger.warn(
+            { estimated_usd: spend.estimated_usd, limit: DAILY_LIMIT_USD },
+            'Blocking API request — daily spend limit reached',
+          );
+          res.writeHead(429, { 'content-type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              type: 'error',
+              error: {
+                type: 'rate_limit_error',
+                message: `Daily spend limit ($${DAILY_LIMIT_USD}) reached. Resets at midnight.`,
+              },
+            }),
+          );
+          return;
+        }
+
         const headers: Record<string, string | number | string[] | undefined> =
           {
             ...(req.headers as Record<string, string>),
@@ -89,7 +190,18 @@ export function startCredentialProxy(
           } as RequestOptions,
           (upRes) => {
             res.writeHead(upRes.statusCode!, upRes.headers);
-            upRes.pipe(res);
+            // Track token usage from API responses
+            const respChunks: Buffer[] = [];
+            upRes.on('data', (chunk) => {
+              respChunks.push(chunk);
+              res.write(chunk);
+            });
+            upRes.on('end', () => {
+              res.end();
+              if (req.url?.includes('/messages')) {
+                trackUsage(Buffer.concat(respChunks).toString());
+              }
+            });
           },
         );
 
