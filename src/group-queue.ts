@@ -344,6 +344,18 @@ export class GroupQueue {
     }
   }
 
+  /**
+   * Remove state for groups not in the active set.
+   * Only removes idle groups (not currently running a container).
+   */
+  cleanup(activeJids: Set<string>): void {
+    for (const [jid, state] of this.groups) {
+      if (!activeJids.has(jid) && !state.active) {
+        this.groups.delete(jid);
+      }
+    }
+  }
+
   async shutdown(_gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 

@@ -90,8 +90,9 @@ async function connectSocket(
         console.log('  3. Tap "Link with phone number instead"');
         console.log(`  4. Enter this code: ${code}\n`);
         fs.writeFileSync(STATUS_FILE, `pairing_code:${code}`);
-      } catch (err: any) {
-        console.error('Failed to request pairing code:', err.message);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('Failed to request pairing code:', message);
         process.exit(1);
       }
     }, 3000);
@@ -111,7 +112,11 @@ async function connectSocket(
     }
 
     if (connection === 'close') {
-      const reason = (lastDisconnect?.error as any)?.output?.statusCode;
+      const reason =
+        lastDisconnect?.error &&
+        'output' in lastDisconnect.error &&
+        (lastDisconnect.error as { output?: { statusCode?: number } }).output
+          ?.statusCode;
 
       if (reason === DisconnectReason.loggedOut) {
         fs.writeFileSync(STATUS_FILE, 'failed:logged_out');

@@ -13,8 +13,8 @@ export const ASSISTANT_NAME =
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER ||
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
-export const POLL_INTERVAL = 2000;
-export const SCHEDULER_POLL_INTERVAL = 60000;
+export const POLL_INTERVAL = safeInt(process.env.POLL_INTERVAL, 2000);
+export const SCHEDULER_POLL_INTERVAL = safeInt(process.env.SCHEDULER_POLL_INTERVAL, 60000);
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
@@ -43,8 +43,7 @@ function safeInt(value: string | undefined, fallback: number): number {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
-export const CONTAINER_PREFIX =
-  process.env.CONTAINER_PREFIX || 'nanoclaw';
+export const CONTAINER_PREFIX = process.env.CONTAINER_PREFIX || 'nanoclaw';
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
 export const CONTAINER_TIMEOUT = safeInt(
@@ -59,7 +58,7 @@ export const CREDENTIAL_PROXY_PORT = safeInt(
   process.env.CREDENTIAL_PROXY_PORT,
   3001,
 );
-export const IPC_POLL_INTERVAL = 1000;
+export const IPC_POLL_INTERVAL = safeInt(process.env.IPC_POLL_INTERVAL, 1000);
 export const IDLE_TIMEOUT = safeInt(process.env.IDLE_TIMEOUT, 1800000); // 30min default
 export const MAX_CONCURRENT_CONTAINERS = Math.max(
   1,

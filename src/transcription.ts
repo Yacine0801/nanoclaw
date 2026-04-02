@@ -69,7 +69,15 @@ export async function transcribeAudioMessage(
       'buffer',
       {},
       {
-        logger: console as any,
+        logger: {
+          level: 'info',
+          child() { return this; },
+          trace() {},
+          debug: console.debug.bind(console),
+          info: console.info.bind(console),
+          warn: console.warn.bind(console),
+          error: console.error.bind(console),
+        },
         reuploadRequest: sock.updateMediaMessage,
       },
     )) as Buffer;

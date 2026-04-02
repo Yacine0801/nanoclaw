@@ -38,7 +38,8 @@ function detectProxyBindHost(): string {
     const ipv4 = docker0.find((a) => a.family === 'IPv4');
     if (ipv4) return ipv4.address;
   }
-  return '0.0.0.0';
+  logger.warn('docker0 interface not found on Linux; binding proxy to 127.0.0.1 instead of 0.0.0.0');
+  return '127.0.0.1';
 }
 
 /** CLI args needed for the container to resolve the host gateway. */

@@ -37,7 +37,14 @@ vi.mock('../transcription.js', () => ({
 
 // Mock media-download
 vi.mock('../media-download.js', () => ({
-  isMediaMessage: vi.fn((msg: any) => !!(msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.documentMessage)),
+  isMediaMessage: vi.fn(
+    (msg: any) =>
+      !!(
+        msg.message?.imageMessage ||
+        msg.message?.videoMessage ||
+        msg.message?.documentMessage
+      ),
+  ),
   downloadAndSaveMedia: vi.fn().mockResolvedValue('/tmp/media/test-image.jpg'),
 }));
 
@@ -487,7 +494,9 @@ describe('WhatsAppChannel', () => {
 
       expect(opts.onMessage).toHaveBeenCalledWith(
         'registered@g.us',
-        expect.objectContaining({ content: '[Image: /tmp/media/test-image.jpg]\nCheck this photo' }),
+        expect.objectContaining({
+          content: '[Image: /tmp/media/test-image.jpg]\nCheck this photo',
+        }),
       );
     });
 

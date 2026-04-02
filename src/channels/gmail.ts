@@ -6,6 +6,7 @@ import { google, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 
 // isMain flag is used instead of MAIN_GROUP_FOLDER constant
+import { calculateBackoff } from '../backoff.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -61,7 +62,8 @@ function loadGmailSendAllowlist(): GmailSendAllowlistConfig {
       direct_send: Array.isArray(parsed.direct_send)
         ? parsed.direct_send.map((e: string) => e.toLowerCase().trim())
         : GMAIL_ALLOWLIST_DEFAULTS.direct_send,
-      notify_email: parsed.notify_email || GMAIL_ALLOWLIST_DEFAULTS.notify_email,
+      notify_email:
+        parsed.notify_email || GMAIL_ALLOWLIST_DEFAULTS.notify_email,
       cc_email: parsed.cc_email || GMAIL_ALLOWLIST_DEFAULTS.cc_email,
     };
   } catch (err: unknown) {
@@ -193,13 +195,11 @@ export class GmailChannel implements Channel {
 
     // Start polling with error backoff
     const schedulePoll = () => {
-      const backoffMs =
-        this.consecutiveErrors > 0
-          ? Math.min(
-              this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
-              30 * 60 * 1000,
-            )
-          : this.pollIntervalMs;
+      const backoffMs = calculateBackoff(
+        this.consecutiveErrors,
+        this.pollIntervalMs,
+        30 * 60 * 1000,
+      );
       this.pollTimer = setTimeout(() => {
         this.pollForMessages()
           .catch((err) => logger.error({ err }, 'Gmail poll error'))
@@ -421,8 +421,9 @@ export class GmailChannel implements Channel {
       this.consecutiveErrors = 0;
     } catch (err) {
       this.consecutiveErrors++;
-      const backoffMs = Math.min(
-        this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+      const backoffMs = calculateBackoff(
+        this.consecutiveErrors,
+        this.pollIntervalMs,
         30 * 60 * 1000,
       );
       logger.error(

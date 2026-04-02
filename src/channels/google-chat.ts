@@ -6,6 +6,7 @@ import { Firestore } from '@google-cloud/firestore';
 import { google } from 'googleapis';
 import { GoogleAuth } from 'google-auth-library';
 
+import { calculateBackoff } from '../backoff.js';
 import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
@@ -95,13 +96,11 @@ export class GoogleChatChannel implements Channel {
 
     // Start polling with error backoff
     const schedulePoll = () => {
-      const backoffMs =
-        this.consecutiveErrors > 0
-          ? Math.min(
-              this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
-              5 * 60 * 1000,
-            )
-          : this.pollIntervalMs;
+      const backoffMs = calculateBackoff(
+        this.consecutiveErrors,
+        this.pollIntervalMs,
+        5 * 60 * 1000,
+      );
       this.pollTimer = setTimeout(() => {
         this.pollForMessages()
           .catch((err) => logger.error({ err }, 'Google Chat poll error'))
@@ -223,8 +222,9 @@ export class GoogleChatChannel implements Channel {
       this.consecutiveErrors = 0;
     } catch (err) {
       this.consecutiveErrors++;
-      const backoffMs = Math.min(
-        this.pollIntervalMs * Math.pow(2, this.consecutiveErrors),
+      const backoffMs = calculateBackoff(
+        this.consecutiveErrors,
+        this.pollIntervalMs,
         5 * 60 * 1000,
       );
       logger.error(
