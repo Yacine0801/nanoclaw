@@ -38,8 +38,7 @@ interface FirestoreMessage {
   processed?: boolean;
 }
 
-const AGENT_NAME =
-  process.env.GOOGLE_CHAT_AGENT_NAME || 'nanoclaw';
+const AGENT_NAME = process.env.GOOGLE_CHAT_AGENT_NAME || 'nanoclaw';
 
 const SERVICE_ACCOUNT_PATH =
   process.env.GOOGLE_APPLICATION_CREDENTIALS ||
@@ -83,7 +82,9 @@ export class GoogleChatChannel implements Channel {
     });
 
     // Initialize Google Auth for Chat API calls (use chat-bot SA for sending)
-    const chatSaPath = fs.existsSync(CHAT_BOT_SA_PATH) ? CHAT_BOT_SA_PATH : SERVICE_ACCOUNT_PATH;
+    const chatSaPath = fs.existsSync(CHAT_BOT_SA_PATH)
+      ? CHAT_BOT_SA_PATH
+      : SERVICE_ACCOUNT_PATH;
     this.chatBotAuth = new GoogleAuth({
       keyFile: chatSaPath,
       scopes: ['https://www.googleapis.com/auth/chat.bot'],
@@ -268,6 +269,11 @@ export class GoogleChatChannel implements Channel {
 
     // Track space ID → space name for reply routing
     this.spaceIdToName.set(data.spaceId, data.spaceId);
+    // Cap to prevent unbounded growth
+    if (this.spaceIdToName.size > 500) {
+      const entries = [...this.spaceIdToName.entries()];
+      this.spaceIdToName = new Map(entries.slice(entries.length - 250));
+    }
     this.lastDeliveredSpaceName = data.spaceId;
 
     // Deliver with chat_jid matching the main group so it gets stored correctly,
@@ -317,7 +323,10 @@ export class GoogleChatChannel implements Channel {
         processedAt: new Date().toISOString(),
       });
     } catch (err) {
-      logger.warn({ docId, err }, 'Failed to mark Google Chat message as processed');
+      logger.warn(
+        { docId, err },
+        'Failed to mark Google Chat message as processed',
+      );
     }
   }
 }
