@@ -12,10 +12,7 @@ import { getMessagesSince, getNewMessages } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { logger } from './logger.js';
 import { findChannel, formatMessages } from './router.js';
-import {
-  isTriggerAllowed,
-  loadSenderAllowlist,
-} from './sender-allowlist.js';
+import { isTriggerAllowed, loadSenderAllowlist } from './sender-allowlist.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 
 export interface MessageLoopDeps {
@@ -73,16 +70,12 @@ export async function startMessageLoop(deps: MessageLoopDeps): Promise<void> {
 
           const channel = findChannel(deps.channels, chatJid);
           if (!channel) {
-            logger.warn(
-              { chatJid },
-              'No channel owns JID, skipping messages',
-            );
+            logger.warn({ chatJid }, 'No channel owns JID, skipping messages');
             continue;
           }
 
           const isMainGroup = group.isMain === true;
-          const needsTrigger =
-            !isMainGroup && group.requiresTrigger !== false;
+          const needsTrigger = !isMainGroup && group.requiresTrigger !== false;
 
           if (needsTrigger) {
             const allowlistCfg = loadSenderAllowlist();
@@ -118,10 +111,7 @@ export async function startMessageLoop(deps: MessageLoopDeps): Promise<void> {
             channel
               .setTyping?.(chatJid, true)
               ?.catch((err) =>
-                logger.warn(
-                  { chatJid, err },
-                  'Failed to set typing indicator',
-                ),
+                logger.warn({ chatJid, err }, 'Failed to set typing indicator'),
               );
           } else {
             deps.queue.enqueueMessageCheck(chatJid);

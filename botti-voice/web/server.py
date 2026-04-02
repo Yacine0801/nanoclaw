@@ -217,25 +217,45 @@ async def audio_websocket(websocket: WebSocket):
     logger.info(f"WebSocket connected: {email}")
 
     # Init Workspace client if refresh token is configured
+    # Always use the OAuth client that generated the refresh token (installed client),
+    # not the web client used for browser login.
     workspace = None
-    if GOOGLE_REFRESH_TOKEN and GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
-        workspace = WorkspaceClient(GOOGLE_REFRESH_TOKEN, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET)
-        logger.info("Workspace tools enabled (Gmail, Calendar, Drive)")
-    elif GOOGLE_REFRESH_TOKEN:
-        # Dev mode: use refresh token with client ID/secret from gcp-oauth.keys.json
-        # loaded via GOOGLE_CLIENT_ID_OAUTH / GOOGLE_CLIENT_SECRET_OAUTH env vars
-        client_id = os.environ.get("GOOGLE_CLIENT_ID_OAUTH", GOOGLE_CLIENT_ID)
-        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET_OAUTH", GOOGLE_CLIENT_SECRET)
-        if client_id and client_secret:
-            workspace = WorkspaceClient(GOOGLE_REFRESH_TOKEN, client_id, client_secret)
-            logger.info("Workspace tools enabled (dev mode)")
+    if GOOGLE_REFRESH_TOKEN:
+        ws_client_id = os.environ.get("GOOGLE_CLIENT_ID_OAUTH", GOOGLE_CLIENT_ID)
+        ws_client_secret = os.environ.get("GOOGLE_CLIENT_SECRET_OAUTH", GOOGLE_CLIENT_SECRET)
+        if ws_client_id and ws_client_secret:
+            workspace = WorkspaceClient(GOOGLE_REFRESH_TOKEN, ws_client_id, ws_client_secret)
+            logger.info("Workspace tools enabled (Gmail, Calendar, Drive)")
 
-    bridge = GeminiBridge(workspace=workspace)
+    # Wait for agent selection before connecting Gemini
+    agent_name = "botti"
+    bridge = None
     receive_task = None
     keepalive_task = None
 
     try:
-        await bridge.connect()
+        # Helper to create/reconnect bridge for a given agent
+        async def start_bridge(name: str):
+            nonlocal bridge, receive_task, keepalive_task, agent_name
+            # Clean up previous bridge if switching agent
+            if bridge:
+                if receive_task:
+                    receive_task.cancel()
+                if keepalive_task:
+                    keepalive_task.cancel()
+                await bridge.disconnect()
+
+            agent_name = name
+            bridge = GeminiBridge(workspace=workspace, agent_name=agent_name)
+            await bridge.connect()
+            logger.info("Agent '%s' connected", agent_name)
+
+            receive_task = asyncio.create_task(bridge.receive_responses(send_to_browser))
+            keepalive_task = asyncio.create_task(keepalive())
+
+            await websocket.send_text(json.dumps({
+                "type": "agent_ready", "agent": agent_name
+            }))
 
         async def send_to_browser(msg_type: str, data):
             try:
@@ -260,18 +280,24 @@ async def audio_websocket(websocket: WebSocket):
                 except Exception:
                     break
 
-        receive_task = asyncio.create_task(bridge.receive_responses(send_to_browser))
-        keepalive_task = asyncio.create_task(keepalive())
+        # Start with default agent
+        await start_bridge(agent_name)
 
         while True:
             message = await websocket.receive()
             if "bytes" in message:
-                await bridge.send_audio(message["bytes"])
+                if bridge:
+                    await bridge.send_audio(message["bytes"])
             elif "text" in message:
                 try:
                     cmd = json.loads(message["text"])
                     if cmd.get("type") == "text":
-                        await bridge.send_text(cmd["content"])
+                        if bridge:
+                            await bridge.send_text(cmd["content"])
+                    elif cmd.get("type") == "select_agent":
+                        requested = cmd.get("agent", "botti")
+                        if requested in ("botti", "sam", "thais") and requested != agent_name:
+                            await start_bridge(requested)
                 except json.JSONDecodeError:
                     pass
 

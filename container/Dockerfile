@@ -48,6 +48,20 @@ COPY agent-runner/ ./
 # Build TypeScript
 RUN npm run build
 
+# Create GWS account wrapper scripts (gws-sam, gws-thais, gws-alan)
+# These set GOOGLE_WORKSPACE_CLI_CONFIG_DIR so the correct OAuth token is used.
+# Without these, calling bare `gws` from the shell uses the default account.
+RUN for account in sam thais alan; do \
+      printf '#!/bin/bash\n\
+export GOOGLE_WORKSPACE_CLI_CONFIG_DIR=/home/node/.config/gws/accounts/%s\n\
+# Pre-send log: identify active account before any gmail +send\n\
+if echo "$@" | grep -q "gmail.*+send\\|gmail.*send"; then\n\
+  echo "[gws-wrapper] account=%s args=$*" >&2\n\
+fi\n\
+exec gws "$@"\n' "$account" "$account" > /usr/local/bin/gws-${account} \
+      && chmod +x /usr/local/bin/gws-${account}; \
+    done
+
 # Create workspace directories
 RUN mkdir -p /workspace/group /workspace/global /workspace/extra /workspace/ipc/messages /workspace/ipc/tasks /workspace/ipc/input
 

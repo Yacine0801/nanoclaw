@@ -80,6 +80,8 @@ class BottiVoice {
                         } else if (msg.type === 'turn_complete') {
                             // Gemini interrupted or turn ended — stop all playback immediately
                             this.stopAllPlayback();
+                        } else if (msg.type === 'agent_ready') {
+                            updateStatus(`Connected (${msg.agent})`, 'connected');
                         }
                         // Ignore pings
                     } catch (e) {}
@@ -280,4 +282,18 @@ document.getElementById('textMsg').addEventListener('keydown', (e) => {
         botti.sendText(e.target.value);
         e.target.value = '';
     }
+});
+
+// Agent selector — switch between Botti, Sam, Thais
+document.querySelectorAll('.agent-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const agent = btn.dataset.agent;
+        document.querySelectorAll('.agent-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById('agentTitle').textContent = `${agent.charAt(0).toUpperCase() + agent.slice(1)} Voice`;
+        if (botti.ws && botti.ws.readyState === WebSocket.OPEN) {
+            botti.ws.send(JSON.stringify({ type: 'select_agent', agent }));
+            updateStatus(`Switching to ${agent}...`, 'connecting');
+        }
+    });
 });

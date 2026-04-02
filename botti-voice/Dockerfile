@@ -7,6 +7,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY web/ ./web/
 
+# Agent memory files from NanoClaw groups (copied at build time)
+COPY memory/ ./memory/
+
 ENV PORT=8080
 EXPOSE 8080
 

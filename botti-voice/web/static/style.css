@@ -23,6 +23,25 @@ h1 {
     margin-bottom: 0.5rem;
 }
 
+#agentSelector {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: center;
+    margin-bottom: 1rem;
+}
+
+.agent-btn {
+    padding: 0.4rem 1rem;
+    font-size: 0.85rem;
+    border-radius: 20px;
+    background: #1a1a1a;
+    color: #888;
+    border: 1px solid #333;
+}
+
+.agent-btn:hover:not(:disabled) { background: #222; color: #ccc; }
+.agent-btn.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+
 #status {
     font-size: 0.9rem;
     color: #888;

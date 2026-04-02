@@ -6,6 +6,7 @@ import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 
+import { CONTAINER_PREFIX } from './config.js';
 import { logger } from './logger.js';
 
 /** The container runtime binary name. */
@@ -100,15 +101,22 @@ export function ensureContainerRuntimeRunning(): void {
   }
 }
 
-/** Kill orphaned NanoClaw containers from previous runs. */
+/** Kill orphaned NanoClaw containers from previous runs.
+ *  Only stops containers matching this instance's CONTAINER_PREFIX
+ *  so multiple instances (e.g. nanoclaw vs nanoclaw-thais) don't interfere. */
 export function cleanupOrphans(): void {
   try {
     const output = execFileSync(
       CONTAINER_RUNTIME_BIN,
-      ['ps', '--filter', 'name=nanoclaw-', '--format', '{{.Names}}'],
+      ['ps', '--filter', `name=${CONTAINER_PREFIX}-`, '--format', '{{.Names}}'],
       { stdio: ['pipe', 'pipe', 'pipe'], encoding: 'utf-8' },
     );
-    const orphans = output.trim().split('\n').filter(Boolean);
+    // Docker name filter is a substring match, so "nanoclaw-" also matches
+    // "nanoclaw-thais-". Filter precisely: name must start with our prefix.
+    const orphans = output
+      .trim()
+      .split('\n')
+      .filter((n) => n && n.startsWith(`${CONTAINER_PREFIX}-`));
     for (const name of orphans) {
       try {
         const [bin, args] = stopContainerArgs(name);

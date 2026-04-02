@@ -114,6 +114,19 @@ export class GmailChannel implements Channel {
     schedulePoll();
   }
 
+  // Emails to these addresses are sent directly (with CC to notify).
+  // All other recipients get a draft + notification instead.
+  private static DIRECT_SEND_ALLOWLIST = new Set(
+    (process.env.GMAIL_DIRECT_SEND_ALLOWLIST || 'eline@bestoftours.co.uk,ahmed@bestoftours.co.uk,yacine@bestoftours.co.uk')
+      .toLowerCase().split(',').map(e => e.trim()).filter(Boolean),
+  );
+  private static NOTIFY_EMAIL = process.env.GMAIL_NOTIFY_EMAIL || 'yacine@bestoftours.co.uk';
+  private static CC_EMAIL = process.env.GMAIL_CC_EMAIL || 'yacine@bestoftours.co.uk';
+
+  private isDirectSendAllowed(recipientEmail: string): boolean {
+    return GmailChannel.DIRECT_SEND_ALLOWLIST.has(recipientEmail.toLowerCase());
+  }
+
   async sendMessage(jid: string, text: string): Promise<void> {
     if (!this.gmail) {
       logger.warn('Gmail not initialized');
@@ -162,34 +175,98 @@ export class GmailChannel implements Channel {
       ? meta.subject
       : `Re: ${meta.subject}`;
 
-    const headers = [
-      `To: ${meta.sender}`,
-      `From: ${this.userEmail}`,
-      `Subject: ${subject}`,
-      `In-Reply-To: ${meta.messageId}`,
-      `References: ${meta.messageId}`,
-      'Content-Type: text/plain; charset=utf-8',
-      '',
-      text,
-    ].join('\r\n');
+    if (this.isDirectSendAllowed(meta.sender)) {
+      // Direct send to allowlisted recipients, CC yacine@
+      const headerLines = [
+        `To: ${meta.sender}`,
+        `From: ${this.userEmail}`,
+        `Subject: ${subject}`,
+        `In-Reply-To: ${meta.messageId}`,
+        `References: ${meta.messageId}`,
+      ];
+      if (meta.sender.toLowerCase() !== GmailChannel.CC_EMAIL.toLowerCase()) {
+        headerLines.push(`Cc: ${GmailChannel.CC_EMAIL}`);
+      }
+      headerLines.push('Content-Type: text/plain; charset=utf-8', '', text);
 
-    const encodedMessage = Buffer.from(headers)
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=+$/, '');
+      const headers = headerLines.join('\r\n');
 
-    try {
-      await this.gmail.users.messages.send({
-        userId: 'me',
-        requestBody: {
-          raw: encodedMessage,
-          threadId,
-        },
-      });
-      logger.info({ to: meta.sender, threadId }, 'Gmail reply sent');
-    } catch (err) {
-      logger.error({ jid, err }, 'Failed to send Gmail reply');
+      const encodedMessage = Buffer.from(headers)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+      try {
+        await this.gmail.users.messages.send({
+          userId: 'me',
+          requestBody: { raw: encodedMessage, threadId },
+        });
+        logger.info({ to: meta.sender, threadId }, 'Gmail reply sent');
+      } catch (err) {
+        logger.error({ jid, err }, 'Failed to send Gmail reply');
+      }
+    } else {
+      // External recipient: create draft + send notification to yacine@
+      const headers = [
+        `To: ${meta.sender}`,
+        `From: ${this.userEmail}`,
+        `Subject: ${subject}`,
+        `In-Reply-To: ${meta.messageId}`,
+        `References: ${meta.messageId}`,
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        text,
+      ].join('\r\n');
+
+      const encodedMessage = Buffer.from(headers)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+
+      try {
+        const draft = await this.gmail.users.drafts.create({
+          userId: 'me',
+          requestBody: {
+            message: { raw: encodedMessage, threadId },
+          },
+        });
+        logger.info(
+          { to: meta.sender, threadId, draftId: draft.data.id },
+          'Gmail draft created (external recipient)',
+        );
+
+        // Notify yacine@ about the pending draft
+        const notifyHeaders = [
+          `To: ${GmailChannel.NOTIFY_EMAIL}`,
+          `From: ${this.userEmail}`,
+          `Subject: [Draft pending] ${subject} → ${meta.sender}`,
+          'Content-Type: text/plain; charset=utf-8',
+          '',
+          `Draft reply created for ${meta.senderName} <${meta.sender}>.\n\n` +
+          `Subject: ${subject}\n` +
+          `---\n${text}\n---\n\n` +
+          `Review and send from ${this.userEmail} drafts.`,
+        ].join('\r\n');
+
+        const encodedNotify = Buffer.from(notifyHeaders)
+          .toString('base64')
+          .replace(/\+/g, '-')
+          .replace(/\//g, '_')
+          .replace(/=+$/, '');
+
+        await this.gmail.users.messages.send({
+          userId: 'me',
+          requestBody: { raw: encodedNotify },
+        });
+        logger.info(
+          { to: GmailChannel.NOTIFY_EMAIL, draftFor: meta.sender },
+          'Draft notification sent',
+        );
+      } catch (err) {
+        logger.error({ jid, err }, 'Failed to create Gmail draft');
+      }
     }
   }
 

@@ -92,8 +92,8 @@ async def google_login(request: Request):
         request.session["user_email"] = "dev@local"
         request.session["pin_verified"] = True
         return RedirectResponse("/")
-    redirect_uri = request.url_for("auth_callback")
-    return await oauth.google.authorize_redirect(request, str(redirect_uri))
+    redirect_uri = str(request.url_for("auth_callback")).replace("http://", "https://")
+    return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
 @oauth_router.get("/callback")

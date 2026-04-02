@@ -41,7 +41,11 @@ export function loadSenderAllowlist(
   const filePath = pathOverride ?? SENDER_ALLOWLIST_PATH;
 
   // Use cache for default path when TTL hasn't expired
-  if (!pathOverride && cachedConfig && Date.now() - cacheTimestamp < CACHE_TTL_MS) {
+  if (
+    !pathOverride &&
+    cachedConfig &&
+    Date.now() - cacheTimestamp < CACHE_TTL_MS
+  ) {
     return cachedConfig;
   }
 

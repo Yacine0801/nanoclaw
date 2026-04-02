@@ -74,6 +74,9 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 
+// Track Google Chat reply targets: group folder -> gchat jid to reply to
+const lastGchatReplyTarget: Record<string, string> = {};
+
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
@@ -248,6 +251,20 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         resetErrorCooldown(chatJid);
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
+
+        // Cross-post to Google Chat if the triggering message came from Chat
+        const gchatChannel = channels.find(
+          (c) => c.name === 'google-chat' && c.isConnected(),
+        );
+        if (gchatChannel && lastGchatReplyTarget[group.folder]) {
+          const gchatJid = lastGchatReplyTarget[group.folder];
+          try {
+            await gchatChannel.sendMessage(gchatJid, text);
+          } catch (err) {
+            logger.warn({ err, gchatJid }, 'Failed to cross-post to Google Chat');
+          }
+          delete lastGchatReplyTarget[group.folder];
+        }
       }
       // Only reset idle timer on actual results, not session-update markers (result: null)
       resetIdleTimer();
@@ -375,7 +392,9 @@ function createMessageLoopDeps() {
     queue,
     getRegisteredGroups: () => registeredGroups,
     getLastTimestamp: () => lastTimestamp,
-    setLastTimestamp: (ts: string) => { lastTimestamp = ts; },
+    setLastTimestamp: (ts: string) => {
+      lastTimestamp = ts;
+    },
     getLastAgentTimestamp: () => lastAgentTimestamp,
     setLastAgentTimestamp: (chatJid: string, ts: string) => {
       lastAgentTimestamp[chatJid] = ts;
@@ -501,6 +520,15 @@ async function main(): Promise<void> {
           return;
         }
       }
+      // Track Google Chat reply target for cross-posting
+      const gchatMatch = msg.content.match(/\[Reply to: (gchat:spaces\/\S+)\]/);
+      if (gchatMatch) {
+        const group = registeredGroups[chatJid];
+        if (group) {
+          lastGchatReplyTarget[group.folder] = gchatMatch[1];
+        }
+      }
+
       storeMessage(msg);
     },
     onChatMetadata: (

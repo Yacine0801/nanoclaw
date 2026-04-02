@@ -9,7 +9,12 @@
 </head>
 <body>
     <div id="app">
-        <h1>Botti Voice</h1>
+        <h1 id="agentTitle">Botti Voice</h1>
+        <div id="agentSelector">
+            <button class="agent-btn active" data-agent="botti">Botti</button>
+            <button class="agent-btn" data-agent="sam">Sam</button>
+            <button class="agent-btn" data-agent="thais">Thais</button>
+        </div>
         <div id="status">Disconnected</div>
         <div class="pulse-ring" id="pulseRing"></div>
         <div class="controls">

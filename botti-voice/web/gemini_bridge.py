@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class GeminiBridge:
     """Bridges browser WebSocket audio <-> Gemini Live API session."""
 
-    def __init__(self, workspace: Optional[WorkspaceClient] = None):
+    def __init__(self, workspace: Optional[WorkspaceClient] = None, agent_name: str = "botti"):
         self.client = genai.Client(
             http_options={"api_version": "v1beta"},
             api_key=config.GEMINI_API_KEY,
@@ -22,6 +22,16 @@ class GeminiBridge:
         self.session = None
         self._ctx = None
         self.workspace = workspace
+        self.agent_name = agent_name
+
+    def _build_system_prompt(self) -> str:
+        """Load system prompt from NanoClaw memory, falling back to hardcoded."""
+        memory = config.load_agent_memory(self.agent_name)
+        if memory:
+            logger.info("Loaded %s memory (%d chars)", self.agent_name, len(memory))
+            return config.VOICE_PREAMBLE + "\n\n" + memory
+        logger.info("No memory found for %s, using default prompt", self.agent_name)
+        return config.SYSTEM_PROMPT
 
     def _build_config(self) -> types.LiveConnectConfig:
         tools = [
@@ -46,7 +56,7 @@ class GeminiBridge:
             ),
             tools=tools,
             system_instruction=types.Content(
-                parts=[types.Part.from_text(text=config.SYSTEM_PROMPT)],
+                parts=[types.Part.from_text(text=self._build_system_prompt())],
                 role="user",
             ),
         )

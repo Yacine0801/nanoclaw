@@ -25,11 +25,6 @@ class WorkspaceClient:
             token_uri="https://oauth2.googleapis.com/token",
             client_id=client_id,
             client_secret=client_secret,
-            scopes=[
-                "https://www.googleapis.com/auth/gmail.modify",
-                "https://www.googleapis.com/auth/calendar",
-                "https://www.googleapis.com/auth/drive.readonly",
-            ],
         )
         self._gmail = None
         self._calendar = None

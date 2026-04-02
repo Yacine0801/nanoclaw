@@ -1,11 +1,42 @@
 import os
+import logging
 from dotenv import load_dotenv
 from google.genai import types
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
+
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
-GEMINI_MODEL = "models/gemini-2.5-flash-native-audio-preview-12-2025"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "models/gemini-2.5-flash-native-audio-latest")
+
+# NanoClaw memory integration — load CLAUDE.md from agent groups
+NANOCLAW_MEMORY_PATHS = {
+    "botti": os.environ.get("NANOCLAW_BOTTI_MEMORY", "/app/memory/botti/CLAUDE.md"),
+    "sam": os.environ.get("NANOCLAW_SAM_MEMORY", "/app/memory/sam/CLAUDE.md"),
+    "thais": os.environ.get("NANOCLAW_THAIS_MEMORY", "/app/memory/thais/CLAUDE.md"),
+}
+
+VOICE_PREAMBLE = """Tu es en mode vocal.
+- Tutoie toujours Yacine. Jamais de vouvoiement.
+- Français par défaut. Anglais si Yacine parle anglais ou si le contexte l'exige.
+- Factuel, direct, dense. Zéro flatterie, zéro "bien sûr", zéro "excellente question".
+- Réponses courtes : 3-4 phrases max sauf demande explicite de développement.
+- Quand tu listes, 3 items max. Si il y en a plus, demande si tu continues.
+- Pas de markdown en vocal — tu parles, tu ne rédiges pas."""
+
+
+def load_agent_memory(agent_name: str) -> str | None:
+    """Load CLAUDE.md for the given agent from NanoClaw group folder."""
+    path = NANOCLAW_MEMORY_PATHS.get(agent_name)
+    if not path:
+        return None
+    try:
+        with open(path, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        logger.warning("Memory file not found for %s: %s", agent_name, path)
+        return None
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")

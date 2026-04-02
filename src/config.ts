@@ -43,14 +43,28 @@ function safeInt(value: string | undefined, fallback: number): number {
   return Number.isNaN(parsed) ? fallback : parsed;
 }
 
+export const CONTAINER_PREFIX =
+  process.env.CONTAINER_PREFIX || 'nanoclaw';
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
-export const CONTAINER_TIMEOUT = safeInt(process.env.CONTAINER_TIMEOUT, 1800000);
-export const CONTAINER_MAX_OUTPUT_SIZE = safeInt(process.env.CONTAINER_MAX_OUTPUT_SIZE, 10485760); // 10MB default
-export const CREDENTIAL_PROXY_PORT = safeInt(process.env.CREDENTIAL_PROXY_PORT, 3001);
+export const CONTAINER_TIMEOUT = safeInt(
+  process.env.CONTAINER_TIMEOUT,
+  1800000,
+);
+export const CONTAINER_MAX_OUTPUT_SIZE = safeInt(
+  process.env.CONTAINER_MAX_OUTPUT_SIZE,
+  10485760,
+); // 10MB default
+export const CREDENTIAL_PROXY_PORT = safeInt(
+  process.env.CREDENTIAL_PROXY_PORT,
+  3001,
+);
 export const IPC_POLL_INTERVAL = 1000;
 export const IDLE_TIMEOUT = safeInt(process.env.IDLE_TIMEOUT, 1800000); // 30min default
-export const MAX_CONCURRENT_CONTAINERS = Math.max(1, safeInt(process.env.MAX_CONCURRENT_CONTAINERS, 5));
+export const MAX_CONCURRENT_CONTAINERS = Math.max(
+  1,
+  safeInt(process.env.MAX_CONCURRENT_CONTAINERS, 5),
+);
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
