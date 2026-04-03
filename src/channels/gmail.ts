@@ -460,7 +460,6 @@ export class GmailChannel implements Channel {
     const snapshot = await this.firestore
       .collection(collectionPath)
       .where('processed', '==', false)
-      .orderBy('timestamp', 'asc')
       .limit(10)
       .get();
 
