@@ -188,13 +188,13 @@ function buildVolumeMounts(
   }
 
   // Google Workspace CLI credentials (for gws MCP inside the container)
-  // Read-only: token refresh happens outside containers via credential proxy
+  // Writable: gws CLI manages its own OAuth token refresh inside the container
   const gwsDir = path.join(homeDir, '.config', 'gws');
   if (fs.existsSync(gwsDir)) {
     mounts.push({
       hostPath: gwsDir,
       containerPath: '/home/node/.config/gws',
-      readonly: true,
+      readonly: false,
     });
   }
 
