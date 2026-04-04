@@ -52,7 +52,10 @@ export function loadMountAllowlist(): MountAllowlist | null {
   const now = Date.now();
 
   // Return cache if TTL hasn't expired
-  if (cachedAllowlist !== null && now - cacheTimestamp < MOUNT_ALLOWLIST_CACHE_TTL_MS) {
+  if (
+    cachedAllowlist !== null &&
+    now - cacheTimestamp < MOUNT_ALLOWLIST_CACHE_TTL_MS
+  ) {
     return cachedAllowlist;
   }
 
