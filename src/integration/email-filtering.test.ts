@@ -103,7 +103,9 @@ const mockMessagesModify = vi.fn().mockResolvedValue({});
 function makeGmailMock() {
   return {
     users: {
-      getProfile: vi.fn().mockResolvedValue({ data: { emailAddress: 'bot@company.com' } }),
+      getProfile: vi
+        .fn()
+        .mockResolvedValue({ data: { emailAddress: 'bot@company.com' } }),
       messages: {
         list: mockMessagesList,
         get: mockMessagesGet,

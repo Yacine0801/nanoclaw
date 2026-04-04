@@ -49,10 +49,16 @@ vi.mock('../env.js', () => ({
 
 // Mock group-folder to avoid path resolution issues
 vi.mock('../group-folder.js', () => ({
-  isValidGroupFolder: vi.fn((folder: string) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(folder)),
+  isValidGroupFolder: vi.fn((folder: string) =>
+    /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(folder),
+  ),
   assertValidGroupFolder: vi.fn(),
-  resolveGroupFolderPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-groups/${folder}`),
-  resolveGroupIpcPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-data/ipc/${folder}`),
+  resolveGroupFolderPath: vi.fn(
+    (folder: string) => `/tmp/nanoclaw-test-groups/${folder}`,
+  ),
+  resolveGroupIpcPath: vi.fn(
+    (folder: string) => `/tmp/nanoclaw-test-data/ipc/${folder}`,
+  ),
 }));
 
 // Mock sender-allowlist to return permissive defaults
@@ -81,7 +87,13 @@ import {
   getSession,
   getAllSessions,
 } from '../db.js';
-import { formatMessages, escapeXml, findChannel, formatOutbound, stripInternalTags } from '../router.js';
+import {
+  formatMessages,
+  escapeXml,
+  findChannel,
+  formatOutbound,
+  stripInternalTags,
+} from '../router.js';
 import { GroupQueue } from '../group-queue.js';
 import {
   isRateLimitError,
@@ -93,7 +105,9 @@ import { Channel, NewMessage, RegisteredGroup } from '../types.js';
 
 // --- Test helpers ---
 
-function makeMessage(overrides: Partial<NewMessage> & { id: string; chat_jid: string }): NewMessage {
+function makeMessage(
+  overrides: Partial<NewMessage> & { id: string; chat_jid: string },
+): NewMessage {
   return {
     sender: 'alice@s.whatsapp.net',
     sender_name: 'Alice',
@@ -111,7 +125,9 @@ function makeChannel(overrides?: Partial<Channel>): Channel {
     connect: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn().mockReturnValue(true),
-    ownsJid: vi.fn((jid: string) => jid.endsWith('@g.us') || jid.endsWith('@s.whatsapp.net')),
+    ownsJid: vi.fn(
+      (jid: string) => jid.endsWith('@g.us') || jid.endsWith('@s.whatsapp.net'),
+    ),
     disconnect: vi.fn().mockResolvedValue(undefined),
     setTyping: vi.fn().mockResolvedValue(undefined),
     ...overrides,
@@ -158,7 +174,11 @@ describe('Message Flow Integration', () => {
 
   describe('message storage and retrieval', () => {
     it('stores a message and retrieves it via getNewMessages', () => {
-      storeChatMetadata('group1@g.us', '2024-01-01T00:00:00.000Z', 'Test Group');
+      storeChatMetadata(
+        'group1@g.us',
+        '2024-01-01T00:00:00.000Z',
+        'Test Group',
+      );
 
       const msg = makeMessage({
         id: 'flow-1',
@@ -190,7 +210,11 @@ describe('Message Flow Integration', () => {
       });
       storeMessage(msg);
 
-      const messages = getMessagesSince('group1@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+      const messages = getMessagesSince(
+        'group1@g.us',
+        '2024-01-01T00:00:00.000Z',
+        'Andy',
+      );
       expect(messages).toHaveLength(1);
       expect(messages[0].content).toBe('@Andy what is the weather?');
     });
@@ -198,12 +222,14 @@ describe('Message Flow Integration', () => {
     it('filters bot messages from retrieval', () => {
       storeChatMetadata('group1@g.us', '2024-01-01T00:00:00.000Z');
 
-      storeMessage(makeMessage({
-        id: 'flow-3a',
-        chat_jid: 'group1@g.us',
-        content: 'user message',
-        timestamp: '2024-01-01T00:00:01.000Z',
-      }));
+      storeMessage(
+        makeMessage({
+          id: 'flow-3a',
+          chat_jid: 'group1@g.us',
+          content: 'user message',
+          timestamp: '2024-01-01T00:00:01.000Z',
+        }),
+      );
 
       storeMessage({
         id: 'flow-3b',
@@ -215,7 +241,11 @@ describe('Message Flow Integration', () => {
         is_bot_message: true,
       });
 
-      const messages = getMessagesSince('group1@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+      const messages = getMessagesSince(
+        'group1@g.us',
+        '2024-01-01T00:00:00.000Z',
+        'Andy',
+      );
       expect(messages).toHaveLength(1);
       expect(messages[0].content).toBe('user message');
     });
@@ -351,7 +381,8 @@ describe('Message Flow Integration', () => {
     });
 
     it('strips multiple internal tags', () => {
-      const raw = '<internal>plan</internal>Result<internal>more notes</internal>';
+      const raw =
+        '<internal>plan</internal>Result<internal>more notes</internal>';
       expect(stripInternalTags(raw)).toBe('Result');
     });
 
@@ -371,21 +402,29 @@ describe('Message Flow Integration', () => {
     it('cursor advances after processing messages', () => {
       storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
 
-      storeMessage(makeMessage({
-        id: 'c1',
-        chat_jid: 'group@g.us',
-        content: 'msg 1',
-        timestamp: '2024-01-01T00:00:01.000Z',
-      }));
-      storeMessage(makeMessage({
-        id: 'c2',
-        chat_jid: 'group@g.us',
-        content: 'msg 2',
-        timestamp: '2024-01-01T00:00:02.000Z',
-      }));
+      storeMessage(
+        makeMessage({
+          id: 'c1',
+          chat_jid: 'group@g.us',
+          content: 'msg 1',
+          timestamp: '2024-01-01T00:00:01.000Z',
+        }),
+      );
+      storeMessage(
+        makeMessage({
+          id: 'c2',
+          chat_jid: 'group@g.us',
+          content: 'msg 2',
+          timestamp: '2024-01-01T00:00:02.000Z',
+        }),
+      );
 
       // First retrieval gets both messages
-      const first = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+      const first = getMessagesSince(
+        'group@g.us',
+        '2024-01-01T00:00:00.000Z',
+        'Andy',
+      );
       expect(first).toHaveLength(2);
 
       // Simulate cursor advance to last message timestamp
@@ -399,12 +438,14 @@ describe('Message Flow Integration', () => {
     it('cursor rollback allows re-processing on error', () => {
       storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
 
-      storeMessage(makeMessage({
-        id: 'r1',
-        chat_jid: 'group@g.us',
-        content: '@Andy help',
-        timestamp: '2024-01-01T00:00:01.000Z',
-      }));
+      storeMessage(
+        makeMessage({
+          id: 'r1',
+          chat_jid: 'group@g.us',
+          content: '@Andy help',
+          timestamp: '2024-01-01T00:00:01.000Z',
+        }),
+      );
 
       const previousCursor = '2024-01-01T00:00:00.000Z';
       const messages = getMessagesSince('group@g.us', previousCursor, 'Andy');
@@ -430,7 +471,9 @@ describe('Message Flow Integration', () => {
       );
 
       expect(getRouterState('last_timestamp')).toBe('2024-06-15T12:00:00.000Z');
-      const agentTs = JSON.parse(getRouterState('last_agent_timestamp') || '{}');
+      const agentTs = JSON.parse(
+        getRouterState('last_agent_timestamp') || '{}',
+      );
       expect(agentTs['group@g.us']).toBe('2024-06-15T11:59:00.000Z');
     });
   });
@@ -547,12 +590,17 @@ describe('Message Flow Integration', () => {
         chat_jid: 'main@s.whatsapp.net',
         sender: 'alice@example.com',
         sender_name: 'Alice Smith',
-        content: '[Email from Alice Smith <alice@example.com>]\nSubject: Hello\n\nHi there!',
+        content:
+          '[Email from Alice Smith <alice@example.com>]\nSubject: Hello\n\nHi there!',
         timestamp: '2024-06-15T10:00:00.000Z',
       });
       storeMessage(emailMsg);
 
-      const messages = getMessagesSince('main@s.whatsapp.net', '2024-01-01T00:00:00.000Z', 'Andy');
+      const messages = getMessagesSince(
+        'main@s.whatsapp.net',
+        '2024-01-01T00:00:00.000Z',
+        'Andy',
+      );
       expect(messages).toHaveLength(1);
       expect(messages[0].content).toContain('[Email from Alice Smith');
     });
@@ -603,7 +651,11 @@ describe('Message Flow Integration', () => {
       ];
       msgs.forEach(storeMessage);
 
-      const retrieved = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
+      const retrieved = getMessagesSince(
+        'group@g.us',
+        '2024-01-01T00:00:00.000Z',
+        'Andy',
+      );
       expect(retrieved).toHaveLength(3);
 
       const formatted = formatMessages(retrieved, 'America/New_York');
@@ -621,15 +673,23 @@ describe('Message Flow Integration', () => {
 
       storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
 
-      storeMessage(makeMessage({
-        id: 'trig-1',
-        chat_jid: 'group@g.us',
-        content: '@Andy what is 2+2?',
-        timestamp: '2024-06-15T10:00:01.000Z',
-      }));
+      storeMessage(
+        makeMessage({
+          id: 'trig-1',
+          chat_jid: 'group@g.us',
+          content: '@Andy what is 2+2?',
+          timestamp: '2024-06-15T10:00:01.000Z',
+        }),
+      );
 
-      const messages = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
-      const hasTrigger = messages.some((m) => TRIGGER_PATTERN.test(m.content.trim()));
+      const messages = getMessagesSince(
+        'group@g.us',
+        '2024-01-01T00:00:00.000Z',
+        'Andy',
+      );
+      const hasTrigger = messages.some((m) =>
+        TRIGGER_PATTERN.test(m.content.trim()),
+      );
       expect(hasTrigger).toBe(true);
     });
 
@@ -638,15 +698,23 @@ describe('Message Flow Integration', () => {
 
       storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
 
-      storeMessage(makeMessage({
-        id: 'no-trig-1',
-        chat_jid: 'group@g.us',
-        content: 'Just a regular message without trigger',
-        timestamp: '2024-06-15T10:00:01.000Z',
-      }));
+      storeMessage(
+        makeMessage({
+          id: 'no-trig-1',
+          chat_jid: 'group@g.us',
+          content: 'Just a regular message without trigger',
+          timestamp: '2024-06-15T10:00:01.000Z',
+        }),
+      );
 
-      const messages = getMessagesSince('group@g.us', '2024-01-01T00:00:00.000Z', 'Andy');
-      const hasTrigger = messages.some((m) => TRIGGER_PATTERN.test(m.content.trim()));
+      const messages = getMessagesSince(
+        'group@g.us',
+        '2024-01-01T00:00:00.000Z',
+        'Andy',
+      );
+      const hasTrigger = messages.some((m) =>
+        TRIGGER_PATTERN.test(m.content.trim()),
+      );
       expect(hasTrigger).toBe(false);
     });
   });

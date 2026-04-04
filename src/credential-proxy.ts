@@ -20,6 +20,17 @@ import path from 'path';
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
 
+// Health endpoint dependencies (lazy-loaded to avoid circular imports)
+let _healthDeps: {
+  getChannels: () => { name: string }[];
+  getRegisteredGroups: () => Record<string, unknown>;
+  assistantName: string;
+} | null = null;
+
+export function setHealthDeps(deps: typeof _healthDeps): void {
+  _healthDeps = deps;
+}
+
 // --- Daily spend tracking ---
 const DAILY_LIMIT_USD = (() => {
   const parsed = parseFloat(process.env.DAILY_API_LIMIT_USD || '20');
@@ -143,6 +154,26 @@ export function startCredentialProxy(
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      // Health check endpoint
+      if (req.method === 'GET' && req.url === '/health') {
+        const body = JSON.stringify({
+          status: 'ok',
+          agent: _healthDeps?.assistantName ?? 'unknown',
+          uptime: Math.round(process.uptime()),
+          channels: (_healthDeps?.getChannels() ?? []).map((c) => c.name),
+          groups: Object.keys(_healthDeps?.getRegisteredGroups() ?? {}).length,
+          port,
+          model: process.env.CLAUDE_MODEL || 'unknown',
+          timestamp: new Date().toISOString(),
+        });
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        });
+        res.end(body);
+        return;
+      }
+
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {

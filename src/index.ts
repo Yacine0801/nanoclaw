@@ -3,7 +3,8 @@
 
 import { ASSISTANT_NAME, CREDENTIAL_PROXY_PORT } from './config.js';
 import { channels, initChannels } from './channel-manager.js';
-import { startCredentialProxy } from './credential-proxy.js';
+import { setHealthDeps, startCredentialProxy } from './credential-proxy.js';
+import { validateEnv } from './env-validation.js';
 import {
   cleanupOrphans,
   ensureContainerRuntimeRunning,
@@ -74,6 +75,7 @@ function ensureContainerSystemRunning(): void {
 }
 
 async function main(): Promise<void> {
+  validateEnv();
   ensureContainerSystemRunning();
   initDatabase();
   logger.info('Database initialized');
@@ -90,6 +92,13 @@ async function main(): Promise<void> {
     CREDENTIAL_PROXY_PORT,
     PROXY_BIND_HOST,
   );
+
+  // Wire up health endpoint dependencies
+  setHealthDeps({
+    getChannels: () => channels,
+    getRegisteredGroups: () => registeredGroups,
+    assistantName: ASSISTANT_NAME,
+  });
 
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {

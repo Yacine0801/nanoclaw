@@ -47,10 +47,16 @@ vi.mock('../env.js', () => ({
 
 // Mock group-folder
 vi.mock('../group-folder.js', () => ({
-  isValidGroupFolder: vi.fn((folder: string) => /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(folder)),
+  isValidGroupFolder: vi.fn((folder: string) =>
+    /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(folder),
+  ),
   assertValidGroupFolder: vi.fn(),
-  resolveGroupFolderPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-groups/${folder}`),
-  resolveGroupIpcPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-data/ipc/${folder}`),
+  resolveGroupFolderPath: vi.fn(
+    (folder: string) => `/tmp/nanoclaw-test-groups/${folder}`,
+  ),
+  resolveGroupIpcPath: vi.fn(
+    (folder: string) => `/tmp/nanoclaw-test-data/ipc/${folder}`,
+  ),
 }));
 
 import {
@@ -73,7 +79,9 @@ import { RegisteredGroup, ScheduledTask } from '../types.js';
 
 // --- Test helpers ---
 
-function makeTask(overrides?: Partial<ScheduledTask>): Omit<ScheduledTask, 'last_run' | 'last_result'> {
+function makeTask(
+  overrides?: Partial<ScheduledTask>,
+): Omit<ScheduledTask, 'last_run' | 'last_result'> {
   return {
     id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
     group_folder: 'whatsapp_main',
@@ -170,11 +178,13 @@ describe('IPC Tasks Integration', () => {
     });
 
     it('updates task schedule', () => {
-      createTask(makeTask({
-        id: 'task-sched-1',
-        schedule_type: 'cron',
-        schedule_value: '0 9 * * *',
-      }));
+      createTask(
+        makeTask({
+          id: 'task-sched-1',
+          schedule_type: 'cron',
+          schedule_value: '0 9 * * *',
+        }),
+      );
 
       updateTask('task-sched-1', {
         schedule_value: '0 10 * * *',
@@ -240,7 +250,13 @@ describe('IPC Tasks Integration', () => {
 
     it('getDueTasks excludes paused tasks', () => {
       const pastDate = new Date(Date.now() - 60000).toISOString();
-      createTask(makeTask({ id: 'task-paused', next_run: pastDate, status: 'paused' as any }));
+      createTask(
+        makeTask({
+          id: 'task-paused',
+          next_run: pastDate,
+          status: 'paused' as any,
+        }),
+      );
 
       const dueTasks = getDueTasks();
       expect(dueTasks).toHaveLength(0);
@@ -497,12 +513,14 @@ describe('IPC Tasks Integration', () => {
     });
 
     it('update_task via IPC updates existing task', async () => {
-      createTask(makeTask({
-        id: 'task-ipc-update',
-        prompt: 'Original prompt',
-        group_folder: 'whatsapp_main',
-        chat_jid: 'main@s.whatsapp.net',
-      }));
+      createTask(
+        makeTask({
+          id: 'task-ipc-update',
+          prompt: 'Original prompt',
+          group_folder: 'whatsapp_main',
+          chat_jid: 'main@s.whatsapp.net',
+        }),
+      );
 
       const deps = makeIpcDeps();
 
@@ -523,11 +541,13 @@ describe('IPC Tasks Integration', () => {
     });
 
     it('cancel_task via IPC removes task', async () => {
-      createTask(makeTask({
-        id: 'task-ipc-cancel',
-        group_folder: 'whatsapp_main',
-        chat_jid: 'main@s.whatsapp.net',
-      }));
+      createTask(
+        makeTask({
+          id: 'task-ipc-cancel',
+          group_folder: 'whatsapp_main',
+          chat_jid: 'main@s.whatsapp.net',
+        }),
+      );
 
       const deps = makeIpcDeps();
 
@@ -545,11 +565,13 @@ describe('IPC Tasks Integration', () => {
     });
 
     it('pause_task via IPC pauses task', async () => {
-      createTask(makeTask({
-        id: 'task-ipc-pause',
-        group_folder: 'whatsapp_main',
-        chat_jid: 'main@s.whatsapp.net',
-      }));
+      createTask(
+        makeTask({
+          id: 'task-ipc-pause',
+          group_folder: 'whatsapp_main',
+          chat_jid: 'main@s.whatsapp.net',
+        }),
+      );
 
       const deps = makeIpcDeps();
 
@@ -567,12 +589,14 @@ describe('IPC Tasks Integration', () => {
     });
 
     it('resume_task via IPC resumes paused task', async () => {
-      createTask(makeTask({
-        id: 'task-ipc-resume',
-        group_folder: 'whatsapp_main',
-        chat_jid: 'main@s.whatsapp.net',
-        status: 'paused' as any,
-      }));
+      createTask(
+        makeTask({
+          id: 'task-ipc-resume',
+          group_folder: 'whatsapp_main',
+          chat_jid: 'main@s.whatsapp.net',
+          status: 'paused' as any,
+        }),
+      );
 
       const deps = makeIpcDeps();
 
@@ -688,19 +712,23 @@ describe('IPC Tasks Integration', () => {
 
   describe('task context mode', () => {
     it('stores isolated context mode', () => {
-      createTask(makeTask({
-        id: 'ctx-isolated',
-        context_mode: 'isolated',
-      }));
+      createTask(
+        makeTask({
+          id: 'ctx-isolated',
+          context_mode: 'isolated',
+        }),
+      );
 
       expect(getTaskById('ctx-isolated')!.context_mode).toBe('isolated');
     });
 
     it('stores group context mode', () => {
-      createTask(makeTask({
-        id: 'ctx-group',
-        context_mode: 'group',
-      }));
+      createTask(
+        makeTask({
+          id: 'ctx-group',
+          context_mode: 'group',
+        }),
+      );
 
       expect(getTaskById('ctx-group')!.context_mode).toBe('group');
     });

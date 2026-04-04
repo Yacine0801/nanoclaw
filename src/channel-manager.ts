@@ -21,10 +21,7 @@ import {
 } from './remote-control.js';
 import { logger } from './logger.js';
 import { Channel, NewMessage } from './types.js';
-import {
-  lastGchatReplyTarget,
-  registeredGroups,
-} from './state.js';
+import { lastGchatReplyTarget, registeredGroups } from './state.js';
 
 export const channels: Channel[] = [];
 
@@ -33,9 +30,7 @@ export const channels: Channel[] = [];
  * Each channel self-registers via the barrel import above.
  * Factories return null when credentials are missing, so unconfigured channels are skipped.
  */
-export async function initChannels(
-  remoteControlPin: string,
-): Promise<void> {
+export async function initChannels(remoteControlPin: string): Promise<void> {
   restoreRemoteControl();
 
   // Handle /remote-control and /remote-control-end commands

@@ -23,10 +23,7 @@ import {
   resetErrorCooldown,
   shouldNotifyError,
 } from './anti-spam.js';
-import {
-  isTriggerAllowed,
-  loadSenderAllowlist,
-} from './sender-allowlist.js';
+import { isTriggerAllowed, loadSenderAllowlist } from './sender-allowlist.js';
 import { logger } from './logger.js';
 import { Channel, RegisteredGroup } from './types.js';
 import {
@@ -111,68 +108,78 @@ export async function processGroupMessages(
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, channels, queue, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-
-      // Anti-spam: intercept rate-limit errors
-      if (text && isRateLimitError(text)) {
-        if (shouldNotifyError(chatJid)) {
-          await channel.sendMessage(
-            chatJid,
-            '\u23f8\ufe0f Je suis temporairement indisponible. Je reviens d\u00e8s que possible.',
-          );
-          markErrorNotified(chatJid);
-          outputSentToUser = true;
-        } else {
-          logger.warn(
-            { group: group.name, chatJid },
-            'Rate limit error suppressed (cooldown active)',
-          );
-        }
-        hadError = true;
-      } else if (text) {
-        // Normal output — reset error cooldown on success
-        resetErrorCooldown(chatJid);
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
-
-        // Cross-post to Google Chat if the triggering message came from Chat
-        const gchatChannel = channels.find(
-          (c) => c.name === 'google-chat' && c.isConnected(),
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    channels,
+    queue,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
         );
-        if (gchatChannel && lastGchatReplyTarget[group.folder]) {
-          const gchatJid = lastGchatReplyTarget[group.folder];
-          try {
-            await gchatChannel.sendMessage(gchatJid, text);
-          } catch (err) {
+
+        // Anti-spam: intercept rate-limit errors
+        if (text && isRateLimitError(text)) {
+          if (shouldNotifyError(chatJid)) {
+            await channel.sendMessage(
+              chatJid,
+              '\u23f8\ufe0f Je suis temporairement indisponible. Je reviens d\u00e8s que possible.',
+            );
+            markErrorNotified(chatJid);
+            outputSentToUser = true;
+          } else {
             logger.warn(
-              { err, gchatJid },
-              'Failed to cross-post to Google Chat',
+              { group: group.name, chatJid },
+              'Rate limit error suppressed (cooldown active)',
             );
           }
-          delete lastGchatReplyTarget[group.folder];
+          hadError = true;
+        } else if (text) {
+          // Normal output — reset error cooldown on success
+          resetErrorCooldown(chatJid);
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+
+          // Cross-post to Google Chat if the triggering message came from Chat
+          const gchatChannel = channels.find(
+            (c) => c.name === 'google-chat' && c.isConnected(),
+          );
+          if (gchatChannel && lastGchatReplyTarget[group.folder]) {
+            const gchatJid = lastGchatReplyTarget[group.folder];
+            try {
+              await gchatChannel.sendMessage(gchatJid, text);
+            } catch (err) {
+              logger.warn(
+                { err, gchatJid },
+                'Failed to cross-post to Google Chat',
+              );
+            }
+            delete lastGchatReplyTarget[group.folder];
+          }
         }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);

@@ -48,8 +48,12 @@ vi.mock('../env.js', () => ({
 vi.mock('../group-folder.js', () => ({
   isValidGroupFolder: vi.fn(() => true),
   assertValidGroupFolder: vi.fn(),
-  resolveGroupFolderPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-groups/${folder}`),
-  resolveGroupIpcPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-data/ipc/${folder}`),
+  resolveGroupFolderPath: vi.fn(
+    (folder: string) => `/tmp/nanoclaw-test-groups/${folder}`,
+  ),
+  resolveGroupIpcPath: vi.fn(
+    (folder: string) => `/tmp/nanoclaw-test-data/ipc/${folder}`,
+  ),
 }));
 
 // Mock fs
@@ -79,8 +83,13 @@ vi.mock('../mount-security.js', () => ({
 vi.mock('../container-runtime.js', () => ({
   CONTAINER_RUNTIME_BIN: 'docker',
   CONTAINER_HOST_GATEWAY: 'host.docker.internal',
-  hostGatewayArgs: vi.fn(() => ['--add-host=host.docker.internal:host-gateway']),
-  readonlyMountArgs: vi.fn((host: string, container: string) => ['-v', `${host}:${container}:ro`]),
+  hostGatewayArgs: vi.fn(() => [
+    '--add-host=host.docker.internal:host-gateway',
+  ]),
+  readonlyMountArgs: vi.fn((host: string, container: string) => [
+    '-v',
+    `${host}:${container}:ro`,
+  ]),
   stopContainerArgs: vi.fn((name: string) => ['docker', ['stop', name]]),
 }));
 
@@ -98,11 +107,14 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // --- Test helpers ---
 
-function makeContainerOutput(result: string | null, opts?: {
-  status?: 'success' | 'error';
-  newSessionId?: string;
-  error?: string;
-}): string {
+function makeContainerOutput(
+  result: string | null,
+  opts?: {
+    status?: 'success' | 'error';
+    newSessionId?: string;
+    error?: string;
+  },
+): string {
   const output: ContainerOutput = {
     status: opts?.status || 'success',
     result,
@@ -135,7 +147,9 @@ describe('Container Lifecycle', () => {
       expect(startIdx).toBeGreaterThanOrEqual(0);
       expect(endIdx).toBeGreaterThan(startIdx);
 
-      const jsonStr = raw.slice(startIdx + OUTPUT_START_MARKER.length, endIdx).trim();
+      const jsonStr = raw
+        .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
+        .trim();
       const parsed: ContainerOutput = JSON.parse(jsonStr);
 
       expect(parsed.status).toBe('success');
@@ -143,11 +157,15 @@ describe('Container Lifecycle', () => {
     });
 
     it('parses output with newSessionId', () => {
-      const raw = makeContainerOutput('Response', { newSessionId: 'session-xyz' });
+      const raw = makeContainerOutput('Response', {
+        newSessionId: 'session-xyz',
+      });
 
       const startIdx = raw.indexOf(OUTPUT_START_MARKER);
       const endIdx = raw.indexOf(OUTPUT_END_MARKER);
-      const jsonStr = raw.slice(startIdx + OUTPUT_START_MARKER.length, endIdx).trim();
+      const jsonStr = raw
+        .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
+        .trim();
       const parsed: ContainerOutput = JSON.parse(jsonStr);
 
       expect(parsed.newSessionId).toBe('session-xyz');
@@ -161,7 +179,9 @@ describe('Container Lifecycle', () => {
 
       const startIdx = raw.indexOf(OUTPUT_START_MARKER);
       const endIdx = raw.indexOf(OUTPUT_END_MARKER);
-      const jsonStr = raw.slice(startIdx + OUTPUT_START_MARKER.length, endIdx).trim();
+      const jsonStr = raw
+        .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
+        .trim();
       const parsed: ContainerOutput = JSON.parse(jsonStr);
 
       expect(parsed.status).toBe('error');
@@ -292,7 +312,12 @@ describe('Container Lifecycle', () => {
 
       // Process has finished — we can verify registerProcess works
       const mockProc = {} as any;
-      queue.registerProcess('group@g.us', mockProc, 'test-container', 'test-folder');
+      queue.registerProcess(
+        'group@g.us',
+        mockProc,
+        'test-container',
+        'test-folder',
+      );
 
       vi.useRealTimers();
     });
@@ -414,19 +439,27 @@ describe('Container Lifecycle', () => {
       let resolveProcess: () => void;
 
       queue.setProcessMessagesFn(async () => {
-        await new Promise<void>((resolve) => { resolveProcess = resolve; });
+        await new Promise<void>((resolve) => {
+          resolveProcess = resolve;
+        });
         return true;
       });
 
       queue.enqueueMessageCheck('group@g.us');
       await vi.advanceTimersByTimeAsync(10);
 
-      queue.registerProcess('group@g.us', {} as any, 'container-1', 'test-group');
+      queue.registerProcess(
+        'group@g.us',
+        {} as any,
+        'container-1',
+        'test-group',
+      );
       queue.closeStdin('group@g.us');
 
       const writeFileSync = vi.mocked(fs.default.writeFileSync);
       const closeWrites = writeFileSync.mock.calls.filter(
-        (call) => typeof call[0] === 'string' && String(call[0]).endsWith('_close'),
+        (call) =>
+          typeof call[0] === 'string' && String(call[0]).endsWith('_close'),
       );
       expect(closeWrites.length).toBeGreaterThanOrEqual(1);
 
@@ -475,10 +508,18 @@ describe('Container Lifecycle', () => {
         }
       };
 
-      await onOutput({ status: 'success', result: 'Hello', newSessionId: 'sess-1' });
+      await onOutput({
+        status: 'success',
+        result: 'Hello',
+        newSessionId: 'sess-1',
+      });
       expect(trackedSessionId).toBe('sess-1');
 
-      await onOutput({ status: 'success', result: 'World', newSessionId: 'sess-2' });
+      await onOutput({
+        status: 'success',
+        result: 'World',
+        newSessionId: 'sess-2',
+      });
       expect(trackedSessionId).toBe('sess-2');
     });
   });
