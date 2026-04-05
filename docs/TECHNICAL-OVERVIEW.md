@@ -3018,7 +3018,45 @@ A la connexion, le client peut specifier quel agent utiliser :
 - Le prompt systeme est charge depuis le CLAUDE.md de l'agent selectionne
 - Cela permet a Yacine de "parler" avec n'importe quel agent via la voix
 
-## 18.15 Historique des versions
+## 18.15 Outils de développement installés (Mac Mini)
+
+En plus du stack NanoClaw, les outils suivants sont installés sur le Mac Mini pour le développement et l'intégration :
+
+| Outil | Version | Usage |
+|-------|---------|-------|
+| `gh` | CLI GitHub | Gestion repos, PRs, issues, auth |
+| `supabase` | CLI Supabase | Base de données, auth, edge functions (futur) |
+| `get-shit-done-cc` | Plugin Claude Code | Hooks de session, commit validation, phase detection |
+| `firecrawl-mcp` | MCP Server | Web scraping/crawling via Claude Code (API key configurée) |
+| `notebooklm-py` | Python | Intégration NotebookLM (avec browser Playwright) |
+| `playwright` | Chromium headless | Automatisation browser, screenshots, tests E2E web |
+
+### Configuration MCP (Claude Code)
+
+Firecrawl est configuré comme serveur MCP dans `~/.claude/settings.json` :
+```json
+{
+  "mcpServers": {
+    "firecrawl": {
+      "command": "npx",
+      "args": ["-y", "firecrawl-mcp"],
+      "env": { "FIRECRAWL_API_KEY": "fc-..." }
+    }
+  }
+}
+```
+
+Cela permet à Claude Code d'accéder directement au web crawling via les outils MCP (scrape, crawl, map, search).
+
+### Supabase
+
+Authentifié via token d'accès. Prêt pour :
+- Hébergement de bases de données PostgreSQL
+- Auth utilisateurs (si besoin d'un portail web pour les agents)
+- Edge Functions (serverless, alternative à Cloud Run)
+- Realtime subscriptions (alternative à Firestore pour le polling)
+
+## 18.16 Historique des versions
 
 | Version  | Date       | Changements majeurs                                    |
 |---------|------------|--------------------------------------------------------|
