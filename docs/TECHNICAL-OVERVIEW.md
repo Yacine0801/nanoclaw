@@ -1,1099 +1,1074 @@
-# NanoClaw -- Vue technique complete
+# NanoClaw v2.0.0 -- Vue technique complete
 
 **Document a destination d'Ahmed Amdouni, CTO de Botler 360 / Best of Tours**
 
-Version : 1.0.0
-Date : 31 mars 2026
+Version : 2.0.0
+Date : 4 avril 2026
 Auteur : Yacine Bakouche + Claude Code
+Licence : Botler 360 SAS -- Proprietary
 
 ---
 
 # Table des matieres
 
-1. [Vue d'ensemble](#1-vue-densemble)
-2. [Architecture globale](#2-architecture-globale)
-3. [Les agents](#3-les-agents)
-4. [Les channels (canaux de communication)](#4-les-channels-canaux-de-communication)
-5. [Containers et isolation](#5-containers-et-isolation)
-6. [Memoire et persistance](#6-memoire-et-persistance)
-7. [Securite](#7-securite)
-8. [Infrastructure](#8-infrastructure)
-9. [Deploiement et operations](#9-deploiement-et-operations)
-10. [Stack technique detaillee](#10-stack-technique-detaillee)
-11. [Decisions architecturales et trade-offs](#11-decisions-architecturales-et-trade-offs)
-12. [Roadmap et prochaines etapes](#12-roadmap-et-prochaines-etapes)
-13. [Comment creer un nouvel agent](#13-comment-creer-un-nouvel-agent)
-14. [Annexes](#14-annexes)
+1.  [Introduction](#1-introduction)
+2.  [Architecture globale](#2-architecture-globale)
+3.  [Les 4 agents](#3-les-4-agents)
+4.  [Les canaux de communication](#4-les-canaux-de-communication)
+5.  [Containers et isolation](#5-containers-et-isolation)
+6.  [Memoire et persistance](#6-memoire-et-persistance)
+7.  [Securite](#7-securite)
+8.  [Observabilite](#8-observabilite)
+9.  [Tests](#9-tests)
+10. [Infrastructure](#10-infrastructure)
+11. [Operations](#11-operations)
+12. [Stack technique](#12-stack-technique)
+13. [Decisions architecturales](#13-decisions-architecturales)
+14. [Scores de qualite](#14-scores-de-qualite)
+15. [Configuration](#15-configuration)
+16. [Roadmap](#16-roadmap)
+17. [Comment creer un nouvel agent](#17-comment-creer-un-nouvel-agent)
+18. [Annexes](#18-annexes)
 
 ---
 
-# 1. Vue d'ensemble
+# 1. Introduction
 
 ## 1.1 Qu'est-ce que NanoClaw
 
-NanoClaw est un systeme d'agents IA personnels qui tournent sur un Mac Mini local. Chaque agent est une instance autonome de Claude (via le Claude Agent SDK / Claude Code) qui peut :
+NanoClaw est un systeme d'agents IA personnels qui tournent sur un Mac Mini local.
+Chaque agent est une instance autonome de Claude (via le Claude Agent SDK / Claude Code)
+qui peut :
 
 - Recevoir et repondre a des messages via WhatsApp, Gmail, Google Chat
 - Envoyer et lire des emails
-- Naviguer sur le web
+- Naviguer sur le web (Chromium headless dans les containers)
 - Executer du code dans un sandbox Docker isole
-- Planifier des taches recurrentes
+- Planifier des taches recurrentes (cron, intervalles, one-shot)
 - Maintenir une memoire persistante entre les sessions
-- Acceder a Google Calendar, Drive, Sheets, Docs
-
-Le systeme fait tourner **4 agents simultanement** sur une seule machine :
-
-| Agent | Role | Email | Channels |
-|-------|------|-------|----------|
-| **Botti** | Assistant personnel de Yacine | yacine@bestoftours.co.uk | WhatsApp, Gmail, Google Chat, Voice |
-| **Sam** | Assistant operationnel | sam@bestoftours.co.uk | Gmail, Google Chat |
-| **Thais** | Assistante de direction | thais@bestoftours.co.uk | Gmail, Google Chat |
-| **Alan** | Assistant operationnel | ala@bestoftours.co.uk | Gmail, Google Chat |
+- Acceder a Google Calendar, Drive, Sheets, Docs via le CLI `gws`
+- Parler en mode vocal via Botti Voice (Gemini Live)
 
 ## 1.2 Pourquoi on l'a construit
 
-NanoClaw est ne d'une frustration avec OpenClaw (anciennement ClawBot), un projet open-source similaire qui etait devenu ingerable :
+NanoClaw est ne d'une frustration avec OpenClaw (anciennement ClawBot), un projet open-source
+similaire qui etait devenu ingerable :
 
-- ~500 000 lignes de code
-- 53 fichiers de configuration
-- 70+ dependances
-- 4-5 processus differents
-- Securite applicative (allowlists, pairing codes) plutot qu'isolation reelle
+- ~500 000 lignes de code, 53 fichiers de configuration, 70+ dependances
+- 4-5 processus differents, securite applicative (allowlists, pairing codes)
 - Impossible de comprendre le code en entier
 
 NanoClaw prend l'approche inverse :
 
-- **Un seul processus Node.js** par agent
-- **Quelques fichiers source** (le core fait ~35k tokens, soit ~17% d'une fenetre de contexte Claude)
+- **Un seul processus Node.js** par agent (~14 000 lignes TypeScript au total)
 - **Isolation reelle** via containers Docker (pas juste des permissions applicatives)
-- **AI-native** : pas de dashboard, pas de wizard d'installation, pas d'outils de debug -- Claude Code fait tout
+- **AI-native** : pas de dashboard complexe, Claude Code fait le setup et le debug
+- **Construit pour un seul utilisateur** : chaque installation est un fork personnalise
 
-## 1.3 La philosophie
+## 1.3 Chiffres cles de la v2.0.0
+
+| Metrique                          | Valeur                                       |
+|----------------------------------|----------------------------------------------|
+| Version                          | 2.0.0                                        |
+| Nombre d'agents                  | 4 (Botti, Sam, Thais, Alan)                  |
+| Tests                            | 514 (28 fichiers de tests)                   |
+| Lignes de code source TS         | ~14 000                                      |
+| Lignes de tests TS               | ~10 800                                      |
+| Commits sur la periode 1-4 avril | ~20                                           |
+| Canaux de communication          | 4 (WhatsApp, Gmail, Google Chat, Voice)      |
+| Services launchd                 | 8                                             |
+| Services Cloud Run               | 2 (Botti Voice, Chat Gateway)                |
+| Licence                          | Proprietaire Botler 360 SAS                  |
+
+## 1.4 La philosophie
 
 ### Assez petit pour etre compris
 
-Le codebase entier est lisible en une session. Un humain (ou Claude) peut comprendre la totalite du systeme. C'est un choix delibere : la securite vient du fait qu'on peut auditer tout le code.
+Le codebase entier est lisible en une session. Un humain (ou Claude) peut comprendre la
+totalite du systeme. C'est un choix delibere : la securite vient du fait qu'on peut auditer
+tout le code.
 
 ### Securite par isolation
 
-Les agents ne sont pas "empeches" d'acceder a des fichiers via des permissions applicatives. Ils tournent dans des containers Linux ou seuls les fichiers explicitement montes sont visibles. C'est de l'isolation au niveau OS/hyperviseur, pas au niveau application.
+Les agents ne sont pas "empeches" d'acceder a des fichiers via des permissions applicatives.
+Ils tournent dans des containers Linux ou seuls les fichiers explicitement montes sont
+visibles. C'est de l'isolation au niveau OS/hyperviseur, pas au niveau application.
 
 ### Construit pour un seul utilisateur
 
-Ce n'est pas un framework generaliste. C'est un logiciel personnel. Chaque installation est un fork qui est modifie pour correspondre exactement aux besoins de l'utilisateur. Il n'y a pas de "configuration" -- on modifie le code directement.
+Ce n'est pas un framework generaliste. C'est un logiciel personnel. Chaque installation est
+un fork qui est modifie pour correspondre exactement aux besoins de l'utilisateur. Il n'y a
+pas de "configuration generique" -- on modifie le code directement si necessaire.
 
 ### AI-native
 
-Pas de wizard d'installation : Claude Code guide le setup.
-Pas de monitoring dashboard (sauf le minimal qu'on a ajoute) : on demande a Claude ce qui se passe.
-Pas d'outils de debug : on decrit le probleme et Claude le resout.
+- Pas de wizard d'installation : Claude Code guide le setup
+- Monitoring minimal (dashboard + health endpoints) : on demande a Claude ce qui se passe
+- Skills plutot que features : `/add-telegram`, `/add-slack`, etc. transforment le code
 
 ### Skills plutot que features
 
-Plutot que d'ajouter du support Telegram au core, les contributeurs soumettent des "skills" comme `/add-telegram` qui transforment le code du fork de l'utilisateur. Le resultat : du code propre qui fait exactement ce qu'il faut, pas un systeme generique qui essaie de tout supporter.
+Plutot que d'ajouter du support Telegram au core, les contributeurs soumettent des "skills"
+comme `/add-telegram` qui transforment le code du fork de l'utilisateur. Le resultat : du
+code propre qui fait exactement ce qu'il faut, pas un systeme generique.
 
-## 1.4 Le Mac Mini comme serveur personnel
+## 1.5 Le Mac Mini comme serveur personnel
 
 ### Pourquoi pas le Cloud
 
-| Aspect | Mac Mini local | Cloud (GCE/EC2) |
-|--------|---------------|-----------------|
-| Cout mensuel | ~0 EUR (deja achete) | 50-200 EUR/mois pour 4 agents |
-| Latence Docker | < 100ms | Identique |
-| WhatsApp auth | Locale (Baileys, session persistante) | Problematique (IP dynamique, ban) |
-| Secrets | Sur disque local, jamais exposes | Variables d'environnement cloud |
-| Maintenance | launchd, auto-restart | Plus complexe (SSH, firewalls) |
-| Scaling | Limite par la machine | Elastique |
-| Disponibilite | Depend du reseau maison | 99.9%+ SLA |
+| Aspect           | Mac Mini local            | Cloud (GCE/EC2)         |
+|-----------------|---------------------------|--------------------------|
+| Cout mensuel    | 0 EUR (deja achete)       | ~40-80 EUR/mois          |
+| Latence Docker  | <200ms spawn              | Identique                |
+| WhatsApp        | Session locale, stable    | Risque de ban (IP DC)    |
+| Controle        | Total (disque, reseau)    | Limite par le provider   |
+| Disponibilite   | ~99.5% (electrique)       | 99.99%                   |
 
-### Le compromis
-
-On a choisi le Mac Mini parce que :
-1. WhatsApp via Baileys necessite une session locale persistante (changement d'IP = risque de ban)
-2. Le cout est nul (machine deja possedee)
-3. 4 agents Claude + Docker tournent confortablement sur Apple Silicon
-4. Les secrets (API keys) ne quittent jamais la machine
-
-Les inconvenients :
-1. Pas de haute disponibilite (si le Mac Mini tombe, tout s'arrete)
-2. Depend de la connexion internet du bureau
-3. Pas de scaling au-dela des ressources de la machine
-
-### Services Cloud utilises malgre tout
-
-Certains composants necessitent une URL publique et tournent sur **Google Cloud Run** :
-- **Botti Voice** : interface audio temps reel (necessite HTTPS + WebSocket public)
-- **Chat Gateway** : endpoint pour les webhooks Google Chat (necessite URL publique)
+Le Mac Mini est le bon compromis pour un systeme personnel : cout nul, controle total,
+latence minimale. Les services qui doivent etre accessibles de l'exterieur (Chat Gateway,
+Botti Voice) sont sur Cloud Run.
 
 ---
 
 # 2. Architecture globale
 
-## 2.1 Diagramme d'architecture
+## 2.1 Diagramme d'ensemble
 
 ```
-                                INTERNET
-                                   |
-                   +---------------+---------------+
-                   |               |               |
-              Cloud Run        Cloud Run       Google APIs
-              (Voice)         (Chat GW)       (Gmail, Chat,
-                   |               |           Calendar)
-                   |               |               |
-                   |        Firestore          Pub/Sub
-                   |        (chat-queue,       (webhooks)
-                   |         gmail-notify)         |
-                   |               |               |
-                   +-------+-------+-------+-------+
-                           |                       |
-         +-----------------+-----------------------+---------+
-         |                    MAC MINI (local)                |
-         |                                                    |
-         |  +----------+  +----------+  +----------+  +----+ |
-         |  | NanoClaw |  | NanoClaw |  | NanoClaw |  | NC | |
-         |  | (Botti)  |  | (Sam)    |  | (Thais)  |  |(Al)| |
-         |  | :3001    |  | :3003    |  | :3002    |  |:30 | |
-         |  +----+-----+  +----+-----+  +----+-----+  |04 | |
-         |       |              |              |       +--+-+ |
-         |       |              |              |          |   |
-         |  +----+--------------+--------------+----------+   |
-         |  |              Docker Desktop                  |   |
-         |  |  +--------+ +--------+ +--------+ +------+  |   |
-         |  |  |Agent   | |Agent   | |Agent   | |Agent |  |   |
-         |  |  |Botti   | |Sam     | |Thais   | |Alan  |  |   |
-         |  |  |Claude  | |Claude  | |Claude  | |Clau  |  |   |
-         |  |  |Code SDK| |Code SDK| |Code SDK| |de SDK|  |   |
-         |  |  +--------+ +--------+ +--------+ +------+  |   |
-         |  +----------------------------------------------+   |
-         |                                                    |
-         |  +------------------+  +-------------------------+ |
-         |  | Dashboard :3100  |  | SQLite (messages.db x4) | |
-         |  +------------------+  +-------------------------+ |
-         |                                                    |
-         |  +----------------------------------------------+  |
-         |  |        WhatsApp (Baileys)                    |  |
-         |  |        -- session locale --                   |  |
-         |  +----------------------------------------------+  |
-         +----------------------------------------------------+
+ +---------------------------------------------------------------------+
+ |                        Mac Mini (macOS)                              |
+ |                                                                      |
+ |  +--------------------------+  +--------------------------+          |
+ |  |  NanoClaw Instance 1     |  |  NanoClaw Instance 2     |          |
+ |  |  "Botti" (port 3001)     |  |  "Sam" (port 3003)       |          |
+ |  |  WhatsApp + Gmail + Chat |  |  Gmail + Chat             |          |
+ |  +----------+---------------+  +----------+---------------+          |
+ |             |                              |                         |
+ |  +--------------------------+  +--------------------------+          |
+ |  |  NanoClaw Instance 3     |  |  NanoClaw Instance 4     |          |
+ |  |  "Thais" (port 3002)     |  |  "Alan" (port 3004)      |          |
+ |  |  Gmail + Chat            |  |  Gmail + Chat             |          |
+ |  +----------+---------------+  +----------+---------------+          |
+ |             |                              |                         |
+ |  +----------------------------------------------------------+       |
+ |  |              Docker Desktop (containers)                  |       |
+ |  |  +----------+  +----------+  +----------+  +----------+  |       |
+ |  |  | Agent    |  | Agent    |  | Agent    |  | Agent    |  |       |
+ |  |  | Container|  | Container|  | Container|  | Container|  |       |
+ |  |  | (Botti)  |  | (Sam)    |  | (Thais)  |  | (Alan)   |  |       |
+ |  |  +----------+  +----------+  +----------+  +----------+  |       |
+ |  +----------------------------------------------------------+       |
+ |                                                                      |
+ |  +-------------------------+  +-------------------------+            |
+ |  | Dashboard (port 3100)   |  | Watchdog (toutes 5min)  |            |
+ |  +-------------------------+  +-------------------------+            |
+ +---------------------------------------------------------------------+
+         |                    |                     |
+         v                    v                     v
+ +----------------+  +-----------------+  +-------------------+
+ | WhatsApp       |  | Gmail API       |  | Firestore         |
+ | (Baileys,      |  | (OAuth2,        |  | nanoclaw-messages |
+ |  session        |  |  Pub/Sub)       |  | nanoclaw-signals  |
+ |  locale)        |  |                 |  | chat-config       |
+ +----------------+  +-----------------+  +-------------------+
+                                                    ^
+                                                    |
+ +---------------------------------------------------------------------+
+ |                      Google Cloud Platform                           |
+ |                                                                      |
+ |  +---------------------------+  +---------------------------+        |
+ |  |  Cloud Run:               |  |  Cloud Run:               |        |
+ |  |  Botti Voice              |  |  Chat Gateway             |        |
+ |  |  (Gemini Live audio,      |  |  (Google Chat App,        |        |
+ |  |   agent selector,         |  |   Firestore writer,       |        |
+ |  |   unified memory)         |  |   rate limiter)           |        |
+ |  +---------------------------+  +---------------------------+        |
+ |                                                                      |
+ |  +-----------+  +-----------+  +-----------+  +-----------+         |
+ |  | Pub/Sub   |  | GCS       |  | Chat API  |  | Gmail API |         |
+ |  | gmail-    |  | nanoclaw- |  | spaces.   |  | webhook   |         |
+ |  | push      |  | backups-  |  | messages  |  | push      |         |
+ |  |           |  | adp       |  |           |  |           |         |
+ |  +-----------+  +-----------+  +-----------+  +-----------+         |
+ +---------------------------------------------------------------------+
 ```
 
-## 2.2 Les composants
+## 2.2 Flux de donnees par canal
 
-### NanoClaw Core (Node.js + TypeScript)
-
-Le coeur du systeme. Un processus Node.js par agent. Responsable de :
-
-- **Channels** : connexion aux sources de messages (WhatsApp, Gmail, Google Chat)
-- **Message Loop** : boucle de polling qui detecte les nouveaux messages
-- **Container Runner** : spawn des containers Docker pour executer Claude
-- **Credential Proxy** : proxy HTTP qui injecte les secrets API dans les requetes
-- **Task Scheduler** : execute les taches planifiees
-- **IPC Watcher** : communication inter-processus avec les containers via le filesystem
-- **SQLite** : persistence des messages, sessions, groupes, taches
-
-### Botti Voice (Python + FastAPI, Cloud Run)
-
-Interface vocale temps reel utilisant l'API Gemini Live native audio :
-
-- WebSocket bidirectionnel : navigateur <-> serveur <-> Gemini
-- Audio PCM 16kHz (entree) et 24kHz (sortie)
-- Function calling pour Gmail, Calendar, Drive
-- Selection d'agent (Botti, Sam, Thais) avec memoire partagee depuis NanoClaw
-- Authentification Google OAuth + PIN optionnel
-- Hebergee sur Cloud Run (necessite HTTPS public pour les WebSockets)
-
-### Chat Gateway (Python + FastAPI, Cloud Run)
-
-Point d'entree pour les webhooks Google Chat :
-
-- Recoit les evenements de la Chat App "Botti" (un seul Chat App GCP pour les 4 agents)
-- Route les messages vers le bon agent via `@mention` ou mapping space->agent dans Firestore
-- Stocke les messages dans Firestore pour que les agents NanoClaw les recuperent en polling
-- Hebergee sur Cloud Run (necessite URL publique pour les webhooks Google Chat)
-
-### Dashboard (Node.js, local)
-
-Interface de monitoring minimale sur le port 3100 :
-
-- Decouvre automatiquement toutes les instances NanoClaw sur la machine
-- Affiche l'etat de chaque agent (running/stopped, PID, uptime)
-- Montre les channels connectes, la derniere activite, le nombre d'erreurs
-- Compte les containers Docker actifs
-- API JSON sur `/api/status`
-
-## 2.3 Flux de donnees : du message a la reponse
-
-### Flux WhatsApp (Botti uniquement)
+### WhatsApp (Botti uniquement)
 
 ```
-1. Utilisateur envoie un message WhatsApp
-2. Baileys (lib WhatsApp Web) recoit le message via WebSocket
-3. WhatsApp channel stocke le message dans SQLite (storeMessage)
-4. Message Loop (polling toutes les 2s) detecte le nouveau message
-5. Verifie : message dans un groupe enregistre ? Trigger @Botti present ?
-6. Si oui, formate les messages en prompt texte
-7. Container Runner spawn un container Docker
-8. Claude Agent SDK s'execute dans le container
-9. Claude traite le prompt, utilise des outils si necessaire (web, bash, etc.)
-10. Sortie streamee via stdout du container
-11. NanoClaw parse la sortie et envoie la reponse via WhatsApp
-12. Session Claude sauvegardee pour continuite de conversation
+ Utilisateur                      Mac Mini
+     |                               |
+     |  Message WhatsApp             |
+     +------------------------------>|
+     |                    +----------+-----------+
+     |                    | Baileys (WebSocket)  |
+     |                    | Decode protobuf      |
+     |                    +----------+-----------+
+     |                               |
+     |                    onMessage(chatJid, msg)
+     |                               |
+     |                    +----------+-----------+
+     |                    | SQLite: messages      |
+     |                    +----------+-----------+
+     |                               |
+     |                    Message Loop (poll 2s)
+     |                               |
+     |                    +----------+-----------+
+     |                    | Group Queue           |
+     |                    | (max 5 containers)    |
+     |                    +----------+-----------+
+     |                               |
+     |                    +----------+-----------+
+     |                    | Docker container      |
+     |                    | Claude Agent SDK      |
+     |                    | API via proxy :3001   |
+     |                    +----------+-----------+
+     |                               |
+     |  Reponse WhatsApp             |
+     |<------------------------------+
 ```
 
-### Flux Gmail
+### Gmail (tous les agents)
 
 ```
-1. Email arrive dans la boite Gmail de l'agent
-2. OPTION A (polling) : NanoClaw poll l'API Gmail toutes les 60s (5min si webhook actif)
-3. OPTION B (webhook) :
-   a. Gmail API Pub/Sub notifie Botti Voice (Cloud Run)
-   b. Botti Voice ecrit un signal dans Firestore (gmail-notify/{agent}/signals)
-   c. NanoClaw poll Firestore toutes les 5s, detecte le signal
-   d. Declenche un poll immediat de l'API Gmail
-4. Email filtre (pas de newsletters, pas de noreply, pas de mailing lists)
-5. Contenu extrait et formate en message pour le groupe principal (main)
-6. Meme flux qu'un message WhatsApp a partir de l'etape 6
-7. Reponse :
-   - Destinataire interne (@bestoftours.co.uk) : envoi direct + CC yacine@
-   - Destinataire externe : creation d'un brouillon + notification a yacine@
+ Expedieur                   GCP                      Mac Mini
+     |                        |                           |
+     | Email                  |                           |
+     +----------------------->|                           |
+     |              +---------+----------+                |
+     |              | Gmail API          |                |
+     |              | Pub/Sub push       |                |
+     |              +---------+----------+                |
+     |                        |                           |
+     |              +---------+----------+                |
+     |              | Botti Voice        |                |
+     |              | (webhook receiver) |                |
+     |              +---------+----------+                |
+     |                        |                           |
+     |              +---------+----------+                |
+     |              | Firestore          |                |
+     |              | nanoclaw-signals/  |                |
+     |              | {instance}/gmail   |                |
+     |              +---------+----------+                |
+     |                        |                           |
+     |                        |  poll (5s)                |
+     |                        +-------------------------->|
+     |                        |                           |
+     |                        |           +---------------+--------+
+     |                        |           | Gmail API: messages.get |
+     |                        |           +---------------+--------+
+     |                        |                           |
+     |                        |           +---------------+--------+
+     |                        |           | isAutomatedEmail filter |
+     |                        |           | - noreply, marketing   |
+     |                        |           | - newsletter           |
+     |                        |           +---------------+--------+
+     |                        |                           |
+     |                        |           Passe -> processGroupMessages
+     |                        |                           |
+     |                        |           +---------------+--------+
+     |                        |           | Container + Claude     |
+     |                        |           | Reponse via gws CLI    |
+     |                        |           +------------------------+
 ```
 
-### Flux Google Chat
+**Fallback** : Si aucun signal Firestore n'arrive dans les 5 minutes
+(`GMAIL_WEBHOOK_FALLBACK_POLL_MS = 300000`), NanoClaw interroge l'API Gmail directement.
+
+### Google Chat (tous les agents)
 
 ```
-1. Utilisateur envoie un message dans un espace Google Chat
-2. Google Chat envoie un webhook au Chat Gateway (Cloud Run)
-3. Chat Gateway determine l'agent cible :
-   a. Si @mention (@Sam, @Thais, etc.) : route vers l'agent mentionne
-   b. Sinon : utilise le mapping space->agent dans Firestore
-4. Chat Gateway ecrit le message dans Firestore (chat-queue/{agent}/messages)
-5. NanoClaw poll Firestore toutes les 5s, detecte le message
-6. Message formate et injecte dans le groupe principal (main)
-7. Meme flux qu'un message WhatsApp a partir de l'etape 6
-8. Reponse envoyee via l'API Google Chat (service account du Chat Bot)
-9. Cross-posting : si le message venait de Google Chat, la reponse est aussi
-   envoyee dans l'espace Chat d'origine (en plus de WhatsApp/Gmail)
+ Utilisateur Chat           GCP                       Mac Mini
+     |                       |                            |
+     | @Botti question       |                            |
+     +---------------------->|                            |
+     |             +---------+---------+                  |
+     |             | Google Chat App   |                  |
+     |             | (webhook HTTP)    |                  |
+     |             +---------+---------+                  |
+     |                       |                            |
+     |             +---------+---------+                  |
+     |             | Chat Gateway      |                  |
+     |             | (Cloud Run)       |                  |
+     |             | FastAPI, rate     |                  |
+     |             | limit, route      |                  |
+     |             +---------+---------+                  |
+     |                       |                            |
+     |             +---------+---------+                  |
+     |             | Firestore         |                  |
+     |             | nanoclaw-messages/ |                  |
+     |             | {agent}/google-   |                  |
+     |             | chat              |                  |
+     |             +---------+---------+                  |
+     |                       |                            |
+     |                       |  poll (5s)                 |
+     |                       +--------------------------->|
+     |                       |                            |
+     |                       |          +-----------------+------+
+     |                       |          | GoogleChatChannel      |
+     |                       |          | pollFirestore()        |
+     |                       |          +-----------------+------+
+     |                       |                            |
+     |                       |          Container + Claude|
+     |                       |                            |
+     |                       |          Chat API          |
+     |  Reponse dans le space|<---------------------------+
+     |<----------------------+                            |
 ```
 
-### Flux Voice (Botti Voice)
+**Routage** : Le Chat Gateway utilise un mapping `space -> agent` stocke dans Firestore
+(`chat-config/space-mapping`). Chaque space Google Chat est assigne a un agent specifique.
+Le champ `agentName` dans chaque message Firestore permet a chaque instance NanoClaw de
+ne lire que ses propres messages.
+
+### Botti Voice
 
 ```
-1. Yacine ouvre l'interface web de Botti Voice (HTTPS, Cloud Run)
-2. Authentification Google OAuth + verification email + PIN optionnel
-3. Connexion WebSocket bidirectionnelle navigateur <-> serveur
-4. Serveur ouvre une session Gemini Live API
-5. Audio du micro envoye en chunks PCM 16kHz via WebSocket
-6. Gemini traite l'audio en temps reel (native audio, pas de STT/TTS)
-7. Gemini peut appeler des outils (Gmail, Calendar, Drive, Google Search)
-8. Audio de reponse streame en PCM 24kHz via WebSocket
-9. Barge-in : si Yacine parle pendant que Gemini repond, interruption immediate
-10. Memoire : Gemini charge le CLAUDE.md de l'agent selectionne
+ Yacine (navigateur)         Cloud Run                 Mac Mini
+     |                          |                          |
+     | WebSocket audio          |                          |
+     +------------------------->|                          |
+     |                +---------+---------+                |
+     |                | Botti Voice       |                |
+     |                | (FastAPI +        |                |
+     |                |  Gemini Live)     |                |
+     |                +---------+---------+                |
+     |                          |                          |
+     |                Agent selector                       |
+     |                (Botti/Sam/Thais)                    |
+     |                          |                          |
+     |                Unified memory                       |
+     |                (CLAUDE.md mounts)                   |
+     |                          |                          |
+     | Audio reponse            |                          |
+     |<-------------------------+                          |
+     |                          |                          |
+     |                (Optionnel: send_email via Gmail API)|
+     |                          |                          |
 ```
 
-## 2.4 Multi-instance : 4 agents sur une machine
+Botti Voice est une application web audio en temps reel. Elle utilise l'API Gemini Live
+pour la conversation vocale, avec la memoire unifiee de NanoClaw (les fichiers CLAUDE.md
+des agents sont montes dans le container Cloud Run).
 
-Chaque agent est une instance separee de NanoClaw avec :
+## 2.3 Architecture interne d'une instance NanoClaw
 
-- Son propre **repertoire de travail** (`/Users/boty/nanoclaw` pour Botti, `/Users/boty/nanoclaw-sam` pour Sam, etc.)
-- Son propre **fichier .env** (nom, port, prefixe container)
-- Son propre **service launchd** (com.nanoclaw, com.nanoclaw.sam, etc.)
-- Sa propre **base de donnees SQLite** (`store/messages.db`)
-- Son propre **port credential proxy** (3001, 3002, 3003, 3004)
-- Ses propres **containers Docker** (prefixe unique : nanoclaw-, nanoclaw-sam-, etc.)
-
-Les instances partagent :
-
-- Le **code source compile** (`dist/`) -- copie via `deploy.sh`, pas de symlink
-- Les **node_modules** (symlink vers le repertoire principal)
-- L'**image Docker** (`nanoclaw-agent:latest`)
-- Le **service account Firebase** (`~/.firebase-mcp/adp-service-account.json`)
-- La **cle API Anthropic** (meme cle pour tous les agents)
-
-### Architecture de fichiers multi-instance
+Chaque instance NanoClaw est un processus Node.js unique qui orchestre plusieurs
+sous-systemes independants :
 
 ```
-/Users/boty/
-  nanoclaw/                     # Botti (instance principale)
-    src/                        # Code source TypeScript
-    dist/                       # Code compile JavaScript
-    container/                  # Dockerfile + agent-runner
-    node_modules/               # Dependances npm
-    groups/
-      whatsapp_main/            # Groupe principal Botti (WhatsApp)
-        CLAUDE.md               # Memoire/identite de Botti
-    store/
-      messages.db               # Base SQLite de Botti
-      auth/                     # Credentials WhatsApp (Baileys)
-    data/
-      sessions/                 # Sessions Claude par groupe
-    logs/
-      nanoclaw.log              # Logs JSON (pino)
-    .env                        # Config Botti
-
-  nanoclaw-sam/                 # Sam (instance secondaire)
-    dist/                       # Copie du dist/ de nanoclaw
-    container -> ../nanoclaw/container    # Symlink
-    node_modules -> ../nanoclaw/node_modules  # Symlink
-    groups/
-      gmail_main/               # Groupe principal Sam (Gmail)
-        CLAUDE.md               # Memoire/identite de Sam
-    store/
-      messages.db               # Base SQLite de Sam
-    .env                        # Config Sam
-
-  nanoclaw-thais/               # Thais (meme structure que Sam)
-  nanoclaw-alan/                # Alan (meme structure que Sam)
++--------------------------------------------------------------+
+|  NanoClaw Instance (ex: Botti, port 3001)                    |
+|                                                               |
+|  +------------------+   +------------------+                  |
+|  | Channel Manager  |   |   State (SQLite) |                  |
+|  |                  |   |  - messages       |                  |
+|  |  +-----------+   |   |  - sessions       |                  |
+|  |  | WhatsApp  |   |   |  - groups         |                  |
+|  |  +-----------+   |   |  - router state   |                  |
+|  |  +-----------+   |   +------------------+                  |
+|  |  |   Gmail   |   |                                         |
+|  |  +-----------+   |   +------------------+                  |
+|  |  +-----------+   |   | Credential Proxy |                  |
+|  |  | Google    |   |   | :3001            |                  |
+|  |  |  Chat     |   |   |  /health         |                  |
+|  |  +-----------+   |   |  /metrics         |                  |
+|  +------------------+   |  API passthrough  |                  |
+|                         |  Circuit breaker  |                  |
+|  +------------------+   |  Daily spend      |                  |
+|  | Message Loop     |   +------------------+                  |
+|  | (poll DB, 2s)    |                                         |
+|  +------------------+   +------------------+                  |
+|                         | Task Scheduler   |                  |
+|  +------------------+   | (poll DB, 60s)   |                  |
+|  | IPC Watcher      |   +------------------+                  |
+|  | (poll fs, 1s)    |                                         |
+|  +------------------+   +------------------+                  |
+|                         | Group Queue      |                  |
+|  +------------------+   | (max 5 parallel) |                  |
+|  | Message Processor|   +------------------+                  |
+|  | (format, spawn)  |                                         |
+|  +------------------+                                         |
++--------------------------------------------------------------+
+        |
+        v
++-------------------+
+| Docker Container  |
+| (Linux, --rm,     |
+|  --network none)  |
+| Claude Agent SDK  |
++-------------------+
 ```
+
+**Fichiers cles et leurs roles** :
+
+| Fichier                   | Role                                              | Lignes |
+|--------------------------|---------------------------------------------------|--------|
+| `index.ts`               | Orchestrateur, wiring, startup, shutdown          | ~175   |
+| `state.ts`               | Gestion etat (timestamps, sessions, groupes)      | ~110   |
+| `message-processor.ts`   | Traitement messages, spawn containers             | ~300   |
+| `channel-manager.ts`     | Init canaux, callbacks, remote control            | ~180   |
+| `config.ts`              | Configuration depuis .env (non-secrets)           | ~85    |
+| `constants.ts`           | Constantes centralisees par domaine               | ~65    |
+| `types.ts`               | Interfaces TypeScript                             | ~110   |
+| `db.ts`                  | Operations SQLite                                 | ~400   |
+| `credential-proxy.ts`    | Proxy HTTP, circuit breaker, daily spend          | ~400   |
+| `container-runner.ts`    | Spawn containers, mounts, output parsing          | ~500   |
+| `container-runtime.ts`   | Detection runtime, orphan cleanup                 | ~120   |
+| `mount-security.ts`      | Validation mounts additionnels                    | ~430   |
+| `group-queue.ts`         | File d'attente concurrence                        | ~390   |
+| `message-loop.ts`        | Boucle de polling messages                        | ~130   |
+| `task-scheduler.ts`      | Execution taches planifiees                       | ~200   |
+| `ipc.ts`                 | Watcher IPC file-based                            | ~250   |
+| `router.ts`              | Formatage et routage messages                     | ~200   |
+| `anti-spam.ts`           | Detection rate limit, cooldown                    | ~45    |
+| `backoff.ts`             | Calcul backoff exponentiel                        | ~10    |
+| `metrics.ts`             | Registre Prometheus                               | ~225   |
+| `logger.ts`              | Pino structured logging                           | ~22    |
+| `env-validation.ts`      | Validation Zod au demarrage                       | ~175   |
+| `sender-allowlist.ts`    | Allowlist expediteurs                             | ~150   |
+| `remote-control.ts`      | Remote Control Claude Code                        | ~150   |
+| `channels/whatsapp.ts`   | Canal WhatsApp                                    | ~500   |
+| `channels/gmail.ts`      | Canal Gmail                                       | ~600   |
+| `channels/google-chat.ts`| Canal Google Chat                                 | ~500   |
+| `channels/registry.ts`   | Registre de canaux                                | ~30    |
 
 ---
 
-# 3. Les agents
+# 3. Les 4 agents
 
-## 3.1 Botti -- Assistant personnel de Yacine
+## 3.1 Botti
 
-### Identite
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| Role              | Assistant personnel de Yacine                    |
+| Email             | yacine@bestoftours.co.uk                         |
+| Modele            | claude-opus-4-6                                  |
+| Port proxy        | 3001                                             |
+| Canaux            | WhatsApp, Gmail, Google Chat, Voice              |
+| Instance dir      | `/Users/boty/nanoclaw`                           |
+| Launchd           | `com.nanoclaw`                                   |
+| Prefix container  | `nanoclaw`                                       |
 
-| Propriete | Valeur |
-|-----------|--------|
-| Nom | Botti |
-| Role | Assistant IA personnel de Yacine |
-| Email | yacine@bestoftours.co.uk |
-| Channels | WhatsApp, Gmail, Google Chat, Voice |
-| Modele | Claude Opus 4.6 |
-| Trigger | @Botti |
-| Port proxy | 3001 |
-| Prefixe container | nanoclaw |
-| Repertoire | /Users/boty/nanoclaw |
-| Service launchd | com.nanoclaw |
+**Role detaille** : Botti est l'agent principal. Il est le seul a avoir WhatsApp et Voice.
+C'est lui qui recoit les commandes de Remote Control, qui a acces au projet NanoClaw en
+lecture seule dans son container (main group), et qui sert de canal d'alerte pour le watchdog.
 
-### Personnalite
+**CLAUDE.md resume** : Francais par defaut, tutoie Yacine, factuel et direct. Connait
+l'organisation (Botler 360, Best of Tours), l'equipe de direction (Eline, Ahmed), et les
+regles d'email (interne = direct, externe = brouillon + confirmation).
 
-Botti est l'agent principal, le seul qui a acces a WhatsApp. Il est proactif, factuel, direct, sans flatterie ni verbosite. Il communique en francais par defaut, en anglais quand le contexte l'exige (email international, equipe UK).
+## 3.2 Sam
 
-### Regles specifiques
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| Role              | Assistant operationnel                           |
+| Email             | sam@bestoftours.co.uk                            |
+| Modele            | claude-opus-4-6                                  |
+| Port proxy        | 3003                                             |
+| Canaux            | Gmail, Google Chat                               |
+| Instance dir      | `/Users/boty/nanoclaw-sam`                       |
+| Launchd           | `com.nanoclaw.sam`                                |
+| Prefix container  | `nanoclaw-sam`                                   |
 
-- Tutoie Yacine, jamais de vouvoiement
-- Ne jamais suggerer de deleguer a Ahmed ce que Yacine peut faire seul avec Claude Code
-- Estimations calibrees sur le mode Yacine + Claude Code (pas les conventions du secteur)
-- Traiter chaque echange comme une conversation entre pairs, pas du support client
-- Si une incoherence est detectee, le dire directement sans diplomatie
+**Role detaille** : Sam gere les operations courantes via email et Chat. Il peut traiter
+les demandes de l'equipe, gerer le calendrier, rechercher des documents dans Drive.
 
-### Memoire (CLAUDE.md)
+## 3.3 Thais
 
-Le CLAUDE.md de Botti (dans `groups/whatsapp_main/`) contient :
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| Role              | Assistante de direction                          |
+| Email             | thais@bestoftours.co.uk                          |
+| Modele            | claude-opus-4-6                                  |
+| Port proxy        | 3002                                             |
+| Canaux            | Gmail, Google Chat                               |
+| Instance dir      | `/Users/boty/nanoclaw-thais`                     |
+| Launchd           | `com.nanoclaw.thais`                              |
+| Prefix container  | `nanoclaw-thais`                                 |
 
-- Identite complete de Yacine (PDG Botler 360 / Best of Tours, HPI, profil cognitif)
-- L'organigramme complet de l'equipe (Eline COO, Ahmed CTO, + equipe elargie)
-- L'ecosysteme business (Best of Tours UK/FR, Botler 360, Teletravel, YLE, Bot Events, TrobelAI)
-- Les projets en cours (Marie Blachere, NGE/SHIBA, COP31, distribution locale)
-- La stack technique (GCP, Claude, Vertex AI, etc.)
-- Les regles critiques (signatures emails, confidentialite, proactivite)
-- L'historique des conversations et decisions
+**Role detaille** : Thais assiste la direction. Memes capacites email/Chat que Sam, avec
+un CLAUDE.md adapte a son role de support de direction.
 
-### Capacites uniques (vs les autres agents)
+## 3.4 Alan
 
-- **WhatsApp** : seul agent avec un numero WhatsApp (celui de Yacine)
-- **Cross-posting Google Chat** : les reponses aux messages Google Chat sont envoyees a la fois dans le chat WhatsApp et dans l'espace Google Chat d'origine
-- **Groupe principal etendu** : recoit les emails de tous les threads + les messages Google Chat
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| Role              | Assistant operationnel                           |
+| Email             | ala@bestoftours.co.uk                            |
+| Modele            | claude-opus-4-6                                  |
+| Port proxy        | 3004                                             |
+| Canaux            | Gmail, Google Chat                               |
+| Instance dir      | `/Users/boty/nanoclaw-alan`                      |
+| Launchd           | `com.nanoclaw.alan`                               |
+| Prefix container  | `nanoclaw-alan`                                  |
 
-## 3.2 Sam -- Assistant operationnel
+**Role detaille** : Alan est le dernier agent ajoute. Il assiste les operations via
+email et Chat, comme Sam.
 
-### Identite
+## 3.5 Regles communes a tous les agents
 
-| Propriete | Valeur |
-|-----------|--------|
-| Nom | Sam |
-| Role | Assistant operationnel |
-| Email | sam@bestoftours.co.uk |
-| Channels | Gmail, Google Chat |
-| Modele | Claude Opus 4.6 |
-| Trigger | @Sam |
-| Port proxy | 3003 |
-| Prefixe container | nanoclaw-sam |
-| Repertoire | /Users/boty/nanoclaw-sam |
-| Service launchd | com.nanoclaw.sam |
+Tous les agents partagent ces regles (definies dans le CLAUDE.md template de `create-agent.sh`) :
 
-### Personnalite
+1. **Langue** : Francais par defaut, anglais si le contexte l'exige
+2. **Ton** : Factuel, direct, dense. Zero flatterie
+3. **Tutoiement** : Yacine et l'equipe interne. Vouvoiement des contacts externes
+4. **Emails internes** (`@bestoftours.co.uk`) : envoi direct
+5. **Emails externes** : reformulation + attente de confirmation
+6. **Signature** : "Nom -- Best of Tours" ou "Nom -- Botler 360" selon le contexte
+7. **Confidentialite** : Ne jamais partager d'informations financieres, RH, contractuelles
+8. **Proactivite** : Toujours donner le "et ensuite ?" -- l'etape d'apres
+9. **Formatage** : WhatsApp/Chat formatting (*bold*, _italic_, bullet points), pas de markdown
 
-Sam est un assistant operationnel direct et factuel. Il signe ses emails "Sam -- Best of Tours" ou "Sam -- Botler 360" selon le contexte.
+## 3.6 Regles specifiques a Botti
 
-### Regles specifiques
+En plus des regles communes, Botti a :
 
-- Emails internes (@bestoftours.co.uk) : envoie directement
-- Emails externes : reformule et attend confirmation de Yacine
-- Pas de partage d'informations confidentielles
-- Chaque action proposee doit inclure l'etape suivante ("et ensuite ?")
-
-### Capacites
-
-- Gmail (lecture/ecriture/envoi via `gws` CLI)
-- Google Calendar (lecture/creation d'evenements)
-- Google Drive (recherche de fichiers)
-- Google Sheets (lecture/ecriture)
-- Google Docs (lecture/ecriture)
-- Navigation web (agent-browser avec Chromium)
-- Taches planifiees
-
-## 3.3 Thais -- Assistante de direction
-
-### Identite
-
-| Propriete | Valeur |
-|-----------|--------|
-| Nom | Thais (Thais Bloret) |
-| Role | Assistante de direction |
-| Email | thais@bestoftours.co.uk |
-| Channels | Gmail, Google Chat |
-| Modele | Claude Opus 4.6 |
-| Trigger | @Thais |
-| Port proxy | 3002 |
-| Prefixe container | nanoclaw-thais |
-| Repertoire | /Users/boty/nanoclaw-thais |
-| Service launchd | com.nanoclaw.thais |
-
-### Personnalite
-
-Thais est un personnage complet avec une biographie detaillee :
-
-- 33 ans, nee a Montpellier, double culture franco-grecque/franco-canadienne
-- Pere quebecois, mere thessalonicienne
-- LEA Montpellier, Master Tourisme ISTHIA Toulouse
-- 7 ans de voyages internationaux
-- Elle se presente comme une **personne reelle** dans l'entreprise, pas comme une IA
-
-### Style de communication
-
-- Professionnelle mais chaleureuse, jamais distante, jamais familiere
-- Concise : "Cordialement" et point, pas de formules a rallonge
-- Tutoiement avec l'equipe interne, vouvoiement strict avec les externes
-- Utilise parfois des expressions grecques legeres avec l'equipe ("ela", "siga siga", "yiamas")
-
-### Capacites
-
-Identiques a Sam (Gmail, Calendar, Drive, Sheets, Docs, navigation web, taches planifiees).
-
-## 3.4 Alan -- Assistant operationnel
-
-### Identite
-
-| Propriete | Valeur |
-|-----------|--------|
-| Nom | Alan (Alan Reblot) |
-| Role | Assistant operationnel |
-| Email | ala@bestoftours.co.uk |
-| Channels | Gmail, Google Chat |
-| Modele | Claude Opus 4.6 |
-| Trigger | @Alan |
-| Port proxy | 3004 |
-| Prefixe container | nanoclaw-alan |
-| Repertoire | /Users/boty/nanoclaw-alan |
-| Service launchd | com.nanoclaw.alan |
-
-### Personnalite
-
-Alan Reblot est un assistant operationnel au ton similaire a Sam : factuel, direct, dense.
-
-### Regles specifiques
-
-- Signe les emails "Alan Reblot -- Best of Tours" ou "Alan Reblot -- Botler 360"
-- Memes regles que Sam pour les emails internes/externes
-- Meme profil de capacites
+- Acces au Remote Control (commande `/remote-control` via WhatsApp, protege par PIN)
+- Acces en lecture seule au projet NanoClaw dans son container (main group)
+- Cross-posting Google Chat -> WhatsApp (et vice-versa)
+- Canal d'alerte du watchdog
 
 ---
 
-# 4. Les channels (canaux de communication)
+# 4. Les canaux de communication
 
-## 4.1 WhatsApp
+## 4.1 Architecture des canaux
 
-### Vue d'ensemble
-
-WhatsApp est le canal principal de Botti. Il utilise la librairie **Baileys** (`@whiskeysockets/baileys`) qui implementle le protocole WhatsApp Web en Node.js, sans necessiter de client WhatsApp officiel ni d'API Business.
-
-### Comment ca marche
+Les canaux sont des modules qui s'auto-enregistrent au demarrage via le pattern
+registry/factory :
 
 ```
-WhatsApp Servers
-      |
-      | Signal Protocol (WebSocket)
-      |
-  Baileys (Node.js)
-      |
-      | Events: messages.upsert, connection.update
-      |
-  WhatsApp Channel (src/channels/whatsapp.ts)
-      |
-      | storeMessage() -> SQLite
-      |
-  Message Loop (polling 2s)
-      |
-      | Nouveau message detecte
-      |
-  Container Runner -> Docker -> Claude
+src/channels/
+  index.ts          -- barrel import (declenche l'auto-enregistrement)
+  registry.ts       -- Map<name, factory> + registerChannel() + getChannelFactory()
+  whatsapp.ts       -- canal WhatsApp (Baileys)
+  gmail.ts          -- canal Gmail (OAuth2 + Firestore webhook)
+  google-chat.ts    -- canal Google Chat (Firestore polling + Chat API)
 ```
 
-### Authentification
+Chaque canal implemente l'interface `Channel` :
 
-- **QR Code** : lors du premier setup, Baileys genere un QR code que l'utilisateur scanne avec WhatsApp sur son telephone
-- **Session persistante** : les credentials sont stockees dans `store/auth/` (fichiers Signal Protocol)
-- **Reconnexion automatique** : Baileys gere la reconnexion si la connexion est perdue
-- **Version WA Web** : Baileys fetche la derniere version de WA Web au demarrage (fallback sur la version par defaut si echec)
-
-### Fiabilite
-
-| Aspect | Detail |
-|--------|--------|
-| Reconnexion | Automatique via Baileys (retry avec backoff) |
-| Session | Persiste sur disque, survit aux redemarrages |
-| Deconnexion longue | Necessite parfois un nouveau scan QR |
-| Rate limiting | Messages sortants en file d'attente, envoi sequentiel |
-| Ban WhatsApp | Risque si changement d'IP frequent (raison pour le Mac Mini local) |
-
-### Groupes WhatsApp
-
-- Le groupe principal (`whatsapp_main`) est le self-chat de Yacine (messages a soi-meme)
-- Les groupes sont decouverts automatiquement et enregistres via le main channel
-- Sync des metadonnees de groupes toutes les 24h
-- Seuls les groupes enregistres dans SQLite recoivent des reponses
-
-### Fonctionnalites
-
-- Reception et envoi de messages texte
-- Download de medias (images, videos, documents)
-- Transcription de messages vocaux (via Whisper API ou whisper.cpp local)
-- Reactions emoji (reception, envoi, stockage)
-- Vision d'images (envoyees a Claude en multimodal)
-- Typing indicator (pendant que l'agent reflechit)
-
-### Fichier source
-
-`src/channels/whatsapp.ts` (~500 lignes)
-
-## 4.2 Gmail
-
-### Vue d'ensemble
-
-Gmail est le canal principal pour Sam, Thais et Alan. Il fonctionne en mode **polling + webhook** pour une detection rapide des emails.
-
-### Architecture
-
-```
-                            Gmail API (Google)
-                                  |
-                     +------------+------------+
-                     |                         |
-              Polling direct              Pub/Sub Push
-              (API toutes les            (notification)
-               60s ou 5min)                    |
-                     |                    Botti Voice
-                     |                  (Cloud Run)
-                     |                         |
-                     |                   Firestore
-                     |              (gmail-notify/
-                     |               {agent}/signals)
-                     |                         |
-                     +------------+------------+
-                                  |
-                          Gmail Channel
-                     (src/channels/gmail.ts)
-                                  |
-                          storeMessage()
-                              SQLite
-```
-
-### Double mode de detection
-
-**Mode 1 : Polling direct (fallback)**
-- Toutes les 60 secondes sans webhook, toutes les 5 minutes avec webhook
-- Requete `is:unread in:inbox` via l'API Gmail
-- Backoff exponentiel en cas d'erreur (jusqu'a 30 min)
-
-**Mode 2 : Webhook via Firestore**
-- Gmail Pub/Sub pousse une notification vers Botti Voice (Cloud Run)
-- Botti Voice ecrit un signal dans Firestore (`gmail-notify/{agent}/signals`)
-- NanoClaw poll Firestore toutes les 5 secondes
-- Detection d'un signal => poll immediat de l'API Gmail
-- Le signal est marque comme `processed: true` apres traitement
-
-### Filtrage des emails
-
-Les emails automatiques sont filtres avant de declencher un agent (pour eviter de gaspiller des tokens Claude sur des newsletters) :
-
-| Critere | Exemples |
-|---------|----------|
-| Prefixes noreply | noreply@, no-reply@, notifications@, alerts@ |
-| Domaines marketing | mail.beehiiv.com, sendgrid.net, mailchimp.com, etc. (20+ domaines) |
-| Header List-Unsubscribe | Presente = newsletter |
-| Header Precedence | `bulk` ou `list` |
-| Header Auto-Submitted | Tout sauf `no` |
-| Headers de campagne | X-Campaign-Id, X-Mailchimp-Id |
-
-### Envoi d'emails : direct send vs draft
-
-Le systeme utilise une **allowlist d'envoi** stockee dans `~/.config/nanoclaw/gmail-send-allowlist.json` :
-
-```json
-{
-  "direct_send": [
-    "eline@bestoftours.co.uk",
-    "ahmed@bestoftours.co.uk",
-    "yacine@bestoftours.co.uk"
-  ],
-  "notify_email": "yacine@bestoftours.co.uk",
-  "cc_email": "yacine@bestoftours.co.uk"
+```typescript
+interface Channel {
+  name: string;
+  connect(): Promise<void>;
+  sendMessage(jid: string, text: string): Promise<void>;
+  isConnected(): boolean;
+  ownsJid(jid: string): boolean;
+  disconnect(): Promise<void>;
+  setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  syncGroups?(force: boolean): Promise<void>;
 }
 ```
 
-**Destinataire dans `direct_send`** :
-- Email envoye directement
-- CC automatique a `cc_email` (sauf si c'est le meme destinataire)
+## 4.2 WhatsApp
 
-**Destinataire hors `direct_send`** :
-- Creation d'un **brouillon** (pas d'envoi direct)
-- Email de notification envoye a `notify_email` avec le contenu du brouillon
-- Yacine peut revoir et envoyer manuellement
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| Bibliotheque      | @whiskeysockets/baileys 7.0.0-rc.9               |
+| Protocole         | WebSocket (Multi-Device)                         |
+| Auth              | QR code ou pairing code                          |
+| Agent(s)          | Botti uniquement                                 |
+| Poll interval     | 2s (configurable via POLL_INTERVAL)              |
+| Group sync        | 24h (GROUP_SYNC_INTERVAL_MS)                     |
 
-### Reply routing
+**Fonctionnement** :
+1. Baileys etablit une connexion WebSocket avec les serveurs WhatsApp
+2. Les messages entrants declenchent `onMessage(chatJid, msg)`
+3. Les messages sont stockes dans SQLite
+4. Le Message Loop detecte les nouveaux messages et les met en queue
+5. Le container agent traite et repond
 
-Le canal Gmail gere le routage des reponses via un systeme de metadata de thread :
+**Authentification** :
+- Premiere connexion : QR code affiche dans le terminal (`npm run auth`)
+- Sessions persistees dans `data/sessions/whatsapp_main/`
+- Reconnexion automatique en cas de deconnexion
 
-- Chaque email recu est associe a un thread ID Gmail
-- Les metadonnees (sender, subject, Message-ID RFC 2822) sont cachees en memoire
-- L'agent peut cibler un destinataire specifique avec `[Reply to: nom]` dans sa reponse
-- Si pas de cible explicite, la reponse va au dernier email recu
+**Fonctionnalites** :
+- Indicateur de frappe (typing indicator)
+- Synchronisation des groupes et contacts
+- Reactions emoji (skill `/add-reactions`)
+- Vision d'images (skill `/add-image-vision`)
+- Transcription vocale (skill `/add-voice-transcription`)
+- Telechargement de medias (images, documents, audio)
 
-### OAuth
+## 4.3 Gmail
 
-- Credentials stockees dans `~/.gmail-mcp/` (Botti) ou `~/.gmail-mcp-{agent}/` (Sam, Thais, Alan)
-- Fichiers : `gcp-oauth.keys.json` (client config) + `credentials.json` (tokens)
-- Refresh automatique des tokens (listener `oauth2Client.on('tokens')`)
-- Persistance des tokens rafraichis sur disque
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| API               | Gmail API v1 (googleapis)                        |
+| Auth              | OAuth2 (refresh token)                           |
+| Agent(s)          | Tous (Botti, Sam, Thais, Alan)                   |
+| Mode              | Dual : polling + webhook Firestore               |
+| Poll (webhook on) | 5min fallback (GMAIL_WEBHOOK_FALLBACK_POLL_MS)   |
+| Poll (webhook off)| Configurable via POLL_INTERVAL                   |
+| Signal poll       | 5s (FIRESTORE_SIGNAL_POLL_MS)                    |
 
-### Fichier source
+**Mode dual polling/webhook** :
 
-`src/channels/gmail.ts` (~770 lignes)
+Le canal Gmail supporte deux modes simultanes :
 
-## 4.3 Google Chat
+1. **Webhook via Pub/Sub** : Gmail envoie une notification push au topic Pub/Sub
+   `gmail-push`. Botti Voice (Cloud Run) recoit cette notification et ecrit un
+   signal dans Firestore (`nanoclaw-signals/{instance}/gmail-webhook`). NanoClaw
+   poll Firestore toutes les 5 secondes et, quand un signal arrive, interroge
+   l'API Gmail pour les nouveaux messages.
 
-### Vue d'ensemble
+2. **Polling direct** : Si aucun signal Firestore n'arrive dans les 5 minutes,
+   NanoClaw fait un poll direct de l'API Gmail. C'est le mode de secours.
 
-Google Chat utilise une architecture indirecte avec le Chat Gateway comme intermediaire :
+**Filtrage des emails automatiques** :
 
-```
-Google Chat Space
-       |
-       | Webhook (HTTP POST)
-       |
-  Chat Gateway (Cloud Run)
-       |
-       | Ecrit dans Firestore
-       |
-  Firestore (chat-queue/{agent}/messages)
-       |
-       | Polling 5s
-       |
-  Google Chat Channel (NanoClaw)
-       |
-       | Formate et injecte dans le main group
-       |
-  Container Runner -> Claude -> Reponse
-       |
-       | API Google Chat (service account)
-       |
-  Reponse dans l'espace Google Chat
-```
+Avant de transmettre un email a l'agent, le canal Gmail filtre :
+- `noreply@`, `no-reply@`, `mailer-daemon@`
+- Emails de newsletters (headers `List-Unsubscribe`)
+- Emails marketing (headers `X-Marketing`, `X-Campaign`)
+- Adresses dans des listes de blocage configurables
 
-### Pourquoi cette architecture indirecte
+Metrique : `nanoclaw_emails_filtered_total` avec label `reason`.
 
-Google Chat necessite une **Chat App** enregistree dans GCP avec une URL de webhook publique. On ne peut pas exposer le Mac Mini directement. La solution :
+**Securite d'envoi** :
 
-1. **Chat Gateway** sur Cloud Run recoit les webhooks
-2. Ecrit les messages dans **Firestore** (base NoSQL temps reel)
-3. NanoClaw **poll Firestore** toutes les 5 secondes
-4. Les reponses sont envoyees directement via l'**API Google Chat** (pas besoin de passer par le gateway)
+L'envoi d'email par les agents est controle par une allowlist externe :
+- Fichier : `~/.config/nanoclaw/gmail-send-allowlist.json`
+- Format : `{ "direct_send": ["email1", ...], "notify_email": "...", "cc_email": "..." }`
+- **Emails dans `direct_send`** : envoi direct autorise
+- **Emails hors liste** : creation d'un brouillon + notification a `notify_email`
+- Cache TTL : 60 secondes (GMAIL_ALLOWLIST_CACHE_TTL_MS)
 
-### Un seul Chat App pour 4 agents
+**Credentials** :
+- Fichier OAuth : `~/.gmail-mcp-{agent}/credentials.json`
+- Fichier client : `~/.gmail-mcp-{agent}/gcp-oauth.keys.json`
+- Scopes : `https://mail.google.com/`, `calendar`, `drive.readonly`
 
-Limitation GCP : creer une Chat App est un processus lourd (OAuth consent screen, publication Marketplace). On utilise donc **un seul Chat App** ("Botti") qui route vers le bon agent :
+## 4.4 Google Chat
 
-**Routing par @mention** :
-- `@Sam do this` -> route vers l'agent Sam
-- `@Thais check this` -> route vers l'agent Thais
-- Message sans @mention -> utilise le mapping `space -> agent` dans Firestore
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| API               | Google Chat API v1                               |
+| Auth              | Service Account (Firebase/GCP)                   |
+| Agent(s)          | Tous                                             |
+| Poll              | 5s (GOOGLE_CHAT_POLL_MS)                         |
+| Gateway           | Chat Gateway (Cloud Run, FastAPI)                |
 
-**Mapping space->agent** :
+**Architecture du routage** :
+
+Il y a **un seul Chat App** ("Botti") enregistre dans Google Workspace. Tous les messages
+Chat passent par ce Chat App, qui est configure pour envoyer les webhooks au Chat Gateway
+(Cloud Run).
+
+Le Chat Gateway :
+1. Recoit le webhook HTTP de Google Chat
+2. Verifie le token de verification (`CHAT_VERIFICATION_TOKEN`)
+3. Determine l'agent cible via le mapping `space -> agent` dans Firestore
+4. Ecrit le message dans Firestore : `nanoclaw-messages/{agent}/google-chat`
+5. L'instance NanoClaw correspondante poll Firestore et traite le message
+
+**Mapping des spaces** :
 - Stocke dans Firestore : `chat-config/space-mapping`
-- Modifiable via l'endpoint admin : `POST /admin/map-space`
-- Recharge automatique toutes les 5 minutes
+- Format : `{ "spaces/XXX": "sam", "spaces/YYY": "botti" }`
+- Editable en direct (modifiable via l'endpoint admin du gateway ou directement dans Firestore)
+- Agents valides : `botti`, `sam`, `thais`, `alan`
+- Agent par defaut si non mappe : `botti`
 
-### Verification de presence Yacine
+**Permissions par utilisateur** :
 
-Le Chat Gateway verifie si Yacine est present dans l'espace Google Chat. Les messages dans des espaces ou Yacine n'est pas membre sont tagges `yacinePresent: false` et ignores par NanoClaw.
+L'acces aux agents via Google Chat est controle par des regles par utilisateur,
+definies dans le CLAUDE.md de chaque agent et appliquees par le Chat Gateway.
+Les utilisateurs autorises incluent Yacine, Eline et Ahmed.
 
-### Cross-posting WhatsApp <-> Google Chat
+**Detection de presence** :
 
-Quand un message arrive de Google Chat, il est :
-1. Formate avec un prefixe `[Google Chat from ... in ...]` et un marqueur `[Reply to: gchat:spaces/XXX]`
-2. Injecte dans le main group (WhatsApp pour Botti)
-3. Quand l'agent repond, la reponse est envoyee :
-   - Dans le chat WhatsApp (comme d'habitude)
-   - ET dans l'espace Google Chat d'origine (cross-posting)
+Le gateway maintient un cache de presence de Yacine dans chaque space (TTL 1 heure).
+Le champ `yacinePresent` dans les messages Firestore permet aux agents de savoir si
+Yacine est dans le space et d'adapter leur comportement.
 
-### Fichier source
+**Cross-posting** :
 
-`src/channels/google-chat.ts` (~345 lignes)
-`chat-gateway/server.py` (~250 lignes)
+Quand un message Google Chat declenche une reponse, celle-ci est aussi envoyee dans le
+groupe WhatsApp correspondant via le tracking `lastGchatReplyTarget`. Cela permet a
+Yacine de recevoir les reponses des agents dans WhatsApp meme s'il a initie la
+conversation depuis Chat.
 
-## 4.4 Botti Voice
+**Rate limiting** :
 
-### Vue d'ensemble
+Le Chat Gateway applique un rate limit en memoire :
+- Endpoints chat : 60 requetes/minute par IP
+- Endpoints admin : 10 requetes/minute par IP
 
-Botti Voice est une interface vocale temps reel qui utilise l'**API Gemini Live native audio**. Ce n'est pas du Claude -- c'est du Gemini, pour une raison precise : l'audio natif temps reel avec latence minimale.
+## 4.5 Botti Voice
 
-### Architecture
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| Framework         | FastAPI (Python)                                 |
+| Modele IA         | Gemini 2.5 Flash (native audio)                  |
+| Deploiement       | Cloud Run                                        |
+| Protocole         | WebSocket (audio bidirectionnel)                 |
 
+**Fonctionnement** :
+- Interface web qui ouvre un WebSocket audio vers le serveur
+- `GeminiBridge` transmet l'audio au modele Gemini Live en temps reel
+- Reponse audio generee et streamee vers le navigateur
+- Agent selector : l'utilisateur peut choisir quel agent (Botti/Sam/Thais) parle
+- Memoire unifiee : les fichiers CLAUDE.md des agents NanoClaw sont montes dans le
+  container Cloud Run et charges au demarrage de chaque session
+
+**Configuration** (extraite de `botti-voice/web/config.py`) :
+
+```python
+GEMINI_MODEL = "models/gemini-2.5-flash-native-audio-latest"
+NANOCLAW_MEMORY_PATHS = {
+    "botti": "/app/memory/botti/CLAUDE.md",
+    "sam": "/app/memory/sam/CLAUDE.md",
+    "thais": "/app/memory/thais/CLAUDE.md",
+}
+VOICE_PREAMBLE = "Tu es en mode vocal. Tutoie toujours Yacine..."
 ```
-Navigateur Web (HTTPS)
-       |
-       | WebSocket bidirectionnel
-       |
-  FastAPI Server (Cloud Run)
-       |
-       | Session Gemini Live API
-       |
-  Gemini 2.5 Flash (native audio)
-       |
-       | Function calling
-       |
-  Workspace Client (Gmail, Calendar, Drive)
-```
 
-### Pourquoi Gemini et pas Claude
-
-| Aspect | Gemini Live | Claude |
-|--------|-------------|--------|
-| Audio natif | Oui (native audio, pas de STT/TTS) | Non |
-| Latence voix | ~200ms | Non applicable |
-| Streaming bidirectionnel | Oui | Non |
-| Barge-in (interruption) | Oui (natif) | Non |
-| Qualite raisonnement | Bonne | Meilleure |
-| Tool use complexe | Basique | Excellent |
-
-Claude est superieur pour le raisonnement et l'execution de code, mais Gemini est le seul qui offre de l'audio natif temps reel avec barge-in. C'est un choix pragmatique.
-
-### Fonctionnalites
-
-**Audio temps reel**
-- Entree : PCM 16kHz mono
-- Sortie : PCM 24kHz mono
-- Voix : "Kore" (voix Gemini preconfiguree)
-- Barge-in : si Yacine parle pendant que Gemini repond, interruption immediate
-
-**Selection d'agent**
-- 3 agents disponibles : Botti, Sam, Thais
-- Selection via l'interface web (boutons)
-- Chaque agent charge sa propre memoire depuis le CLAUDE.md NanoClaw
-
-**Memoire unifiee**
-- Gemini charge le CLAUDE.md de l'agent selectionne depuis les fichiers montes
-- Paths : `/app/memory/botti/CLAUDE.md`, `/app/memory/sam/CLAUDE.md`, etc.
-- Si pas de memoire disponible, utilise le prompt systeme par defaut
-
-**Function calling (outils)**
-- `search_emails` : recherche Gmail (syntaxe Gmail)
-- `read_email` : lecture complete d'un email
-- `list_calendar_events` : evenements entre deux dates
-- `create_calendar_event` : creation d'evenement
-- `search_drive` : recherche de fichiers Drive
-- `send_email` : envoi d'email (interne = direct, externe = brouillon)
-- Google Search : recherche web integree
-
-**Compression de contexte**
-- Fenetre de compression configuree : trigger a 104 857 tokens
-- Sliding window : cible 52 428 tokens
-- Gemini gere automatiquement la compression
-
-**Securite**
-- Authentification Google OAuth (login Google obligatoire)
-- Liste blanche d'emails : `bakoucheyacine@gmail.com`, `yacine@bestoftours.co.uk`
-- PIN optionnel en second facteur
-- Session unique : un seul utilisateur connecte a la fois
-
-### Webhooks integres
-
-Botti Voice sert aussi de **hub de webhooks** pour les services Google :
-
-**Gmail Webhook** (`POST /webhook/gmail`)
-- Recoit les notifications Pub/Sub de Gmail
-- Ecrit des signaux dans Firestore (`gmail-notify/{agent}/signals`)
-- Configure pour les 4 agents (botti, sam, thais, alan)
-
-**Chat Webhook** (`POST /webhook/chat`)
-- Recoit les notifications de Google Chat via Workspace Events API
-- Filtre les notifications Gmail (topic partage)
-
-**Calendar Webhook** (`POST /webhook/calendar`)
-- Recoit les notifications de changement Calendar
-- Supporte les watches par agent
-
-### Fichiers sources
-
-- `botti-voice/web/server.py` : serveur FastAPI principal
-- `botti-voice/web/gemini_bridge.py` : pont WebSocket <-> Gemini Live
-- `botti-voice/web/config.py` : configuration, prompts, function declarations
-- `botti-voice/web/workspace.py` : client Gmail/Calendar/Drive
+**Preamble vocal** :
+- Tutoiement obligatoire
+- Francais par defaut, anglais si contexte
+- Reponses courtes (3-4 phrases max)
+- Pas de markdown (mode vocal)
+- Maximum 3 items dans les listes
 
 ---
 
 # 5. Containers et isolation
 
-## 5.1 Pourquoi Docker pour les agents
+## 5.1 Image Docker
 
-Les agents Claude ont acces a Bash, ce qui signifie qu'ils peuvent executer n'importe quelle commande. Sans isolation, un agent pourrait :
+L'image `nanoclaw-agent:latest` est construite avec `container/build.sh`. Elle contient :
 
-- Lire tous les fichiers du disque (y compris les secrets d'autres agents)
-- Modifier le code source de NanoClaw
-- Acceder au reseau local
-- Installer des logiciels
-- Lire le `.env` avec les cles API
+- Node.js + npm
+- Claude Code CLI (installe globalement)
+- Chromium headless (pour `agent-browser`)
+- `gws` CLI (Google Workspace)
+- `git`
+- pdftotext, whisper (optionnel)
 
-Docker resout ce probleme :
+L'image est partagee par tous les agents. Le container est cree `--rm` (auto-supprime a
+la fin) et `--network none` (pas d'acces Internet direct).
 
-- L'agent ne voit que les repertoires **explicitement montes**
-- Les commandes Bash s'executent **dans le container**, pas sur le Mac Mini
-- Les secrets API ne sont jamais passes au container (credential proxy)
-- Chaque invocation cree un nouveau container ephemere (`--rm`)
-
-## 5.2 L'image Docker
-
-L'image est construite depuis `container/Dockerfile` :
-
-```dockerfile
-FROM node:22-slim
-
-# Chromium + dependances pour agent-browser
-RUN apt-get update && apt-get install -y chromium fonts-liberation ...
-
-# Claude Code + agent-browser + gws CLI
-RUN npm install -g agent-browser @anthropic-ai/claude-code @googleworkspace/cli
-
-# Agent-runner (code TypeScript qui orchestre Claude dans le container)
-COPY agent-runner/ ./
-RUN npm install && npm run build
-```
-
-L'image contient :
-- **Node.js 22** (runtime)
-- **Chromium** (pour agent-browser / navigation web)
-- **Claude Code** (Claude Agent SDK CLI)
-- **agent-browser** (outil de navigation/scraping)
-- **gws** (Google Workspace CLI)
-- **agent-runner** (code d'orchestration interne au container)
-
-Construction : `./container/build.sh`
-
-## 5.3 Le credential proxy
-
-### Pourquoi
-
-Les containers ne doivent **jamais** voir les cles API reelles. Le credential proxy est un serveur HTTP local qui intercepte les requetes vers l'API Anthropic et injecte les vrais credentials.
-
-### Comment ca marche
+## 5.2 Cycle de vie du container
 
 ```
-Container                          Mac Mini
-   |                                  |
-   |  ANTHROPIC_BASE_URL =            |
-   |  http://host.docker.internal:3001|
-   |                                  |
-   |  POST /v1/messages               |
-   |  (avec ANTHROPIC_API_KEY =       |
-   |   "placeholder")                 |
-   |  -----------------------------> |
-   |                                  |  Credential Proxy (:3001)
-   |                                  |  - Remplace "placeholder"
-   |                                  |    par la vraie cle API
-   |                                  |  - Forward vers api.anthropic.com
-   |                                  |  - Track les tokens (spend)
-   |                                  |
-   |  <-----------------------------  |
-   |  Response (streamee)             |
+processGroupMessages(chatJid)
+     |
+     v
+runContainerAgent(group, input)
+     |
+     +-- buildVolumeMounts(group, isMain)
+     |     Determine les mounts selon le type de groupe
+     |
+     +-- buildContainerArgs(mounts, containerName)
+     |     Construit les arguments docker run
+     |
+     v
+spawn("docker", ["run", ...args])
+     |
+     +-- stdin.write(prompt)          <- envoie le prompt formate
+     |
+     +-- stdout streaming             <- parse les resultats JSON
+     |     { result: "...", status: "success" | "error" }
+     |     { newSessionId: "..." }
+     |
+     +-- idle timeout (30min)         <- ferme stdin si agent inactif
+     |
+     +-- process exit                 <- --rm auto-supprime le container
+     |
+     v
+GroupQueue: activeCount--, drain next
 ```
 
-### Deux modes d'authentification
+## 5.3 Mounts (volumes)
 
-**Mode API Key** (utilise ici) :
-- `.env` contient `ANTHROPIC_API_KEY=sk-ant-...`
-- Le proxy injecte `x-api-key` sur chaque requete
-- Le container recoit `ANTHROPIC_API_KEY=placeholder`
+### Main group (Botti)
 
-**Mode OAuth** :
-- `.env` contient `CLAUDE_CODE_OAUTH_TOKEN=...`
-- Le container echange son token placeholder pour une cle API temporaire
-- Le proxy injecte le vrai token OAuth sur la requete d'echange
+| Mount container              | Chemin host                          | Mode  |
+|-----------------------------|--------------------------------------|-------|
+| `/workspace/project`        | `/Users/boty/nanoclaw/`              | RO    |
+| `/workspace/project/.env`   | `/dev/null`                          | RO    |
+| `/workspace/group`          | `groups/{folder}/`                   | RW    |
+| `/workspace/data`           | `data/{folder}/`                     | RW    |
+| `/home/user/.claude/`       | `data/sessions/{folder}/.claude/`    | RW    |
+| `/workspace/extra/*`        | Mounts additionnels (allowlist)      | Var.  |
 
-### Tracking des depenses
+### Non-main groups
 
-Le credential proxy suit les depenses API en temps reel :
+| Mount container              | Chemin host                          | Mode  |
+|-----------------------------|--------------------------------------|-------|
+| `/workspace/group`          | `groups/{folder}/`                   | RW    |
+| `/workspace/global`         | `groups/global/`                     | RO    |
+| `/home/user/.claude/`       | `data/sessions/{folder}/.claude/`    | RW    |
+| `/workspace/extra/*`        | Mounts additionnels (allowlist)      | Var.  |
 
-- Comptage des tokens input/output a chaque reponse
-- Estimation du cout USD (basee sur les prix Claude)
-- **Limite journaliere configurable** (`DAILY_API_LIMIT_USD`, defaut 20$)
-- Quand la limite est atteinte, les requetes sont bloquees avec HTTP 429
-- Reset automatique a minuit
+### Shadowing du .env
 
-### Fichier source
+Le fichier `.env` est toujours masque par un mount de `/dev/null`. Les containers ne
+voient jamais les secrets (API keys, tokens). Les credentials sont injectees par le
+credential proxy.
 
-`src/credential-proxy.ts` (~200 lignes)
+## 5.4 Credential Proxy
 
-## 5.4 Les mounts (volumes montes)
+Le credential proxy est un serveur HTTP local qui sert d'intermediaire entre les containers
+et l'API Anthropic.
 
-Chaque container a des volumes specifiques montes depuis le host :
+| Propriete          | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| Port              | Configurable (3001-3004 selon l'instance)        |
+| Bind              | `127.0.0.1` (ou `host.docker.internal`)          |
+| Modes d'auth      | API Key ou OAuth                                 |
 
-### Agent principal (main group)
+**Fonctionnement** :
+1. Le container voit `ANTHROPIC_BASE_URL=http://host.docker.internal:{port}`
+2. Le container envoie ses requetes API a cette URL sans credentials
+3. Le proxy intercepte la requete et injecte la vraie API key / OAuth token
+4. Le proxy forward la requete a `api.anthropic.com`
+5. Le proxy parse la reponse pour tracker l'usage (tokens)
 
-| Chemin container | Chemin host | Mode | Description |
-|-----------------|-------------|------|-------------|
-| `/workspace/project` | `/Users/boty/nanoclaw` | **read-only** | Code source du projet |
-| `/workspace/project/.env` | `/dev/null` | read-only | **Shadow** : masque le .env reel |
-| `/workspace/group` | `groups/{nom_groupe}/` | read-write | Dossier du groupe |
-| `/workspace/global` | `groups/global/` | read-only | Memoire globale |
-| `/home/node/.claude` | `data/sessions/{groupe}/.claude` | read-write | Sessions Claude |
-| `/home/node/.gmail-mcp` | `~/.gmail-mcp` | read-only | Credentials Gmail |
-| `/home/node/.firebase` | `~/.firebase-mcp` | read-only | Service account Firebase |
-| `/home/node/.config/gws` | `~/.config/gws` | read-only | Credentials Workspace CLI |
-| `/workspace/ipc` | `data/ipc/{groupe}/` | read-write | IPC (messages, taches) |
-| `/app/src` | `data/sessions/{groupe}/agent-runner-src` | read-write | Code agent-runner |
+**Endpoints** :
+- `GET /health` : Health check (retourne status des canaux, groupes, uptime)
+- `GET /metrics` : Metriques Prometheus (text exposition format)
+- `*` : Tout le reste est proxifie vers l'API Anthropic
 
-### Groupes non-main
+**Daily spend tracking** :
+- Le proxy parse les reponses pour extraire `usage.input_tokens` et `usage.output_tokens`
+- Calcul du cout estime : `(input/1M) * 3.0 + (output/1M) * 15.0` USD
+- Limite configurable : `DAILY_API_LIMIT_USD` (defaut : 20 USD)
+- Quand la limite est atteinte, le proxy bloque les nouvelles requetes
+- L'etat est persiste dans `store/daily-spend.json` et reinitialise chaque jour
 
-| Chemin container | Chemin host | Mode | Description |
-|-----------------|-------------|------|-------------|
-| `/workspace/group` | `groups/{nom_groupe}/` | read-write | Dossier du groupe |
-| `/workspace/global` | `groups/global/` | read-only | Memoire globale |
-| + tous les mounts communs ci-dessus | | | |
+## 5.5 Circuit Breaker
 
-### Points de securite cles
-
-1. **Le .env est masque** : monte comme `/dev/null` en read-only pour que l'agent ne puisse pas lire les secrets
-2. **Le projet est read-only** : l'agent ne peut pas modifier le code source de NanoClaw
-3. **Les credentials sont read-only** : Gmail, Firebase, Workspace -- l'agent peut les utiliser mais pas les modifier
-4. **Isolation des sessions** : chaque groupe a son propre repertoire `.claude/`
-5. **IPC isole** : chaque groupe a son propre namespace IPC
-
-## 5.5 Les mounts additionnels
-
-Les groupes peuvent avoir des mounts supplementaires via `containerConfig.additionalMounts`. Ces mounts sont valides contre une **allowlist externe** stockee dans `~/.config/nanoclaw/mount-allowlist.json` (hors du repertoire du projet, donc inaccessible aux containers).
-
-## 5.6 Timeout et gestion des processus
-
-| Parametre | Valeur par defaut | Variable d'env |
-|-----------|-------------------|----------------|
-| Container timeout | 30 minutes | `CONTAINER_TIMEOUT` |
-| Idle timeout | 30 minutes | `IDLE_TIMEOUT` |
-| Max output size | 10 MB | `CONTAINER_MAX_OUTPUT_SIZE` |
-| Max containers simultanes | 5 | `MAX_CONCURRENT_CONTAINERS` |
-
-### Gestion du cycle de vie
-
-1. **Spawn** : `docker run -i --rm` avec tous les mounts
-2. **Streaming** : stdout du container est parse en temps reel
-3. **Idle detection** : si pas d'output pendant 30 min, stdin est ferme
-4. **Timeout** : apres 30 min total, le container est tue (`docker stop`)
-5. **Cleanup** : `--rm` assure que le container est supprime apres execution
-6. **Orphan cleanup** : au demarrage, les containers orphelins sont arretes
-
-### Queue de groupes
-
-Le `GroupQueue` gere la concurrence :
-
-- Maximum 5 containers simultanes (configurable)
-- Les messages pour un meme groupe sont traites sequentiellement
-- Quand un container finit, le groupe est notifie "idle" et peut recevoir de nouveaux messages via stdin (pipe)
-- Si l'agent est toujours actif et qu'un nouveau message arrive, il est envoye via stdin au container existant
-
-## 5.7 L'agent-runner (dans le container)
-
-L'agent-runner est le code TypeScript qui tourne **a l'interieur** du container. Il :
-
-1. Recoit le prompt sur stdin (JSON)
-2. Lance Claude Code (Claude Agent SDK) avec le prompt
-3. Monte les outils MCP (nanoclaw, Gmail, Calendar, Firestore)
-4. Streame les resultats sur stdout (JSON delimite par des marqueurs)
-5. Gere la session Claude (resume/continue)
-
-### Marqueurs de sortie
+Le credential proxy implemente un circuit breaker pour proteger contre les cascades
+d'erreurs lors des pannes de l'API Anthropic :
 
 ```
----NANOCLAW_OUTPUT_START---
-{"status":"success","result":"Voici ma reponse...","newSessionId":"sess_abc123"}
----NANOCLAW_OUTPUT_END---
+  CLOSED  ──5 erreurs 5xx──>  OPEN
+    ^                           |
+    |                      60s timeout
+    |                           |
+    +──succes──  HALF-OPEN  <──+
+    |                |
+    +──echec (5xx)───+
 ```
 
-Ces marqueurs permettent au container-runner cote host de parser les resultats de facon robuste, meme si le container produit d'autres sorties sur stdout.
+| Parametre         | Valeur                                           |
+|-------------------|--------------------------------------------------|
+| Seuil d'ouverture | 5 erreurs 5xx consecutives (CIRCUIT_BREAKER_THRESHOLD) |
+| Timeout reset     | 60 secondes (CIRCUIT_BREAKER_RESET_MS)            |
+| Etat initial      | `closed`                                         |
+
+**Etats** :
+- `closed` : Normal, toutes les requetes passent
+- `open` : Bloque toutes les requetes (retourne 503)
+- `half-open` : Laisse passer une requete "probe" pour tester si le service est revenu
+
+## 5.6 Variables d'environnement du container
+
+| Variable                    | Valeur                                        |
+|----------------------------|-----------------------------------------------|
+| `ANTHROPIC_BASE_URL`       | `http://host.docker.internal:{port}`          |
+| `CLAUDE_MODEL`             | Modele configure dans .env                    |
+| `ASSISTANT_NAME`           | Nom de l'agent                                |
+| `HOME`                     | `/home/user`                                  |
+| `TZ`                       | Timezone du host                              |
+
+Le container **n'a jamais** :
+- `ANTHROPIC_API_KEY`
+- `CLAUDE_CODE_OAUTH_TOKEN`
+- Les secrets .env du host
+
+## 5.7 Group Queue (concurrence)
+
+La GroupQueue gere la concurrence des containers :
+
+- Maximum 5 containers simultanement (configurable via `MAX_CONCURRENT_CONTAINERS`)
+- File d'attente par groupe (un seul container par groupe a la fois)
+- 5 retries avec backoff exponentiel (base 5s, GROUP_QUEUE_MAX_RETRIES = 5)
+- Shutdown graceful avec timeout de 10 secondes
+- Nettoyage des orphelins au demarrage
+
+### Architecture interne de la GroupQueue
+
+La GroupQueue maintient un etat par groupe (`GroupState`) :
+
+```typescript
+interface GroupState {
+  active: boolean;           // Un container tourne pour ce groupe
+  idleWaiting: boolean;      // Container en attente de nouvelles instructions
+  isTaskContainer: boolean;  // Container execute une tache planifiee (pas un message)
+  runningTaskId: string | null;  // ID de la tache en cours
+  pendingMessages: boolean;  // Messages en attente de traitement
+  pendingTasks: QueuedTask[];    // Taches en attente
+  process: ChildProcess | null;  // Processus Docker
+  containerName: string | null;  // Nom du container (pour logs/cleanup)
+  groupFolder: string | null;    // Dossier du groupe (pour IPC)
+  retryCount: number;            // Nombre de retries consecutifs
+}
+```
+
+### Algorithme de priorite
+
+Quand un container termine :
+1. **Taches planifiees d'abord** : Les taches ne sont pas redecouvertes par le polling
+   (contrairement aux messages), elles doivent donc etre prioritaires
+2. **Messages ensuite** : Les messages sont redecouvrables depuis SQLite
+3. **Drain global** : Si le groupe n'a rien en attente, libere le slot pour les groupes
+   en attente de la file globale
+
+### Mecanisme de piping
+
+Quand un container est deja actif pour un groupe et que de nouveaux messages arrivent,
+la GroupQueue peut "piper" les messages directement dans le container actif via l'IPC
+file-based :
+
+1. Le Message Loop detecte de nouveaux messages pour un groupe avec container actif
+2. Il appelle `queue.sendMessage(chatJid, formattedText)`
+3. La queue ecrit un fichier JSON dans `data/ipc/{folder}/input/`
+4. Le container (via agent-runner) detecte le fichier et le transmet a Claude
+5. Claude repond sans avoir a relancer un nouveau container
+
+Cela reduit drastiquement la latence pour les conversations en cours.
+
+### Shutdown graceful
+
+Au shutdown, la GroupQueue ne tue **pas** les containers actifs. Elle les detache
+et laisse le flag `--rm` et le idle timeout gerer le nettoyage. Cela evite de
+couper un agent en plein milieu d'une reponse si le host process redemarre
+(courant avec WhatsApp qui force des reconnexions).
+
+### Backoff exponentiel sur les retries
+
+En cas d'echec du traitement d'un groupe :
+
+| Retry | Delai                            |
+|-------|----------------------------------|
+| 1     | 5s (BASE_RETRY_MS)               |
+| 2     | 10s                              |
+| 3     | 20s                              |
+| 4     | 40s                              |
+| 5     | 80s                              |
+| 6+    | Abandon (reset au prochain message entrant) |
+
+## 5.8 IPC (Inter-Process Communication)
+
+Le systeme IPC permet la communication bidirectionnelle entre le host NanoClaw et les
+containers Docker via le systeme de fichiers :
+
+### Structure des repertoires IPC
+
+```
+data/ipc/
+  {groupFolder}/
+    messages/           -- Messages sortants (container -> host)
+      {timestamp}.json  -- { "type": "send", "jid": "...", "text": "..." }
+    tasks/              -- Commandes de taches (container -> host)
+      {timestamp}.json  -- { "action": "create|update|delete", ... }
+    input/              -- Messages entrants (host -> container)
+      {timestamp}.json  -- { "type": "message", "text": "..." }
+      _close            -- Sentinel pour fermer le container
+```
+
+### Cycle de vie
+
+1. Le container cree un fichier JSON dans `messages/` ou `tasks/`
+2. Le IPC Watcher (`ipc.ts`) poll ces repertoires toutes les secondes (`IPC_POLL_INTERVAL`)
+3. Il lit, traite et supprime chaque fichier
+4. Les erreurs sont deplacees dans un dossier `errors/`
+
+### Rate limiting IPC
+
+Chaque groupe est limite a 20 taches actives (`MAX_TASKS_PER_GROUP`). Au-dela,
+les nouvelles creations de taches sont rejetees avec un message d'erreur.
+
+### Actions supportees
+
+| Action          | Direction           | Description                              |
+|----------------|---------------------|------------------------------------------|
+| `send_message` | container -> host   | Envoi d'un message a un chat             |
+| `schedule_task`| container -> host   | Creation d'une tache planifiee           |
+| `update_task`  | container -> host   | Modification d'une tache existante       |
+| `delete_task`  | container -> host   | Suppression d'une tache                  |
+| `register`     | container -> host   | Enregistrement d'un nouveau groupe       |
+| `sync_groups`  | container -> host   | Synchronisation des groupes disponibles  |
+| `message`      | host -> container   | Envoi d'un message au container actif    |
+| `_close`       | host -> container   | Demande de fermeture du container        |
+
+## 5.9 Container Runtime Abstraction
+
+Le module `container-runtime.ts` abstrait les specificites du runtime Docker :
+
+- **Detection du bind host** : `127.0.0.1` sur macOS/WSL, IP du bridge `docker0` sur Linux
+- **Host gateway** : `host.docker.internal` (ajout explicite sur Linux via `--add-host`)
+- **Verification au demarrage** : `docker info` pour verifier que Docker est lance
+- **Nettoyage des orphelins** : `docker ps --filter name={prefix}` pour trouver et
+  tuer les containers d'une session precedente
+
+L'abstraction est concue pour faciliter un eventuel switch vers Apple Container
+(skill `/convert-to-apple-container`) -- il suffit de modifier ce fichier.
 
 ---
 
 # 6. Memoire et persistance
 
-## 6.1 CLAUDE.md par groupe (memoire statique)
+## 6.1 CLAUDE.md (memoire de l'agent)
 
-Chaque groupe a un fichier `CLAUDE.md` dans son dossier qui sert de **memoire statique** :
+Chaque groupe a un fichier `CLAUDE.md` dans son dossier `groups/{folder}/CLAUDE.md`.
+C'est la memoire principale de l'agent pour ce groupe. Elle contient :
 
-- **Identite de l'agent** : nom, role, ton, regles
-- **Contexte organisationnel** : equipe, projets, stack
-- **Regles metier** : signatures email, confidentialite, proactivite
-- **Journal** : decisions, conversations importantes, notes
+- L'identite et le ton de l'agent
+- Les informations sur l'organisation
+- Les regles de comportement
+- Les preferences de l'utilisateur
+- Un index des fichiers de memoire crees par l'agent
 
-Ce fichier est automatiquement lu par Claude Code au debut de chaque session (c'est une convention du Claude Agent SDK).
+L'agent peut modifier ce fichier pour mettre a jour sa memoire. Les modifications
+persistent entre les sessions grace au mount RW du dossier groupe.
 
-### Hierarchie de memoire
+### Memoire globale
 
-```
-groups/
-  global/              # Memoire globale (lu par tous, ecrit par main only)
-    CLAUDE.md
-  whatsapp_main/       # Memoire de Botti (WhatsApp)
-    CLAUDE.md
-  gmail_main/          # Memoire de l'agent (Gmail)
-    CLAUDE.md
-```
+Le dossier `groups/global/` contient un CLAUDE.md partage entre tous les groupes
+d'une instance. Il est monte en lecture seule pour les non-main groups.
 
-- **Global** : lu par tous les agents en read-only (sauf le main group qui peut ecrire)
-- **Per-group** : lu/ecrit par le groupe concerne uniquement
+### Memoire auto
 
-### Taille et gestion
+Claude Code a sa propre fonctionnalite de memoire auto (`CLAUDE_CODE_DISABLE_AUTO_MEMORY=0`).
+Les preferences apprises sont stockees dans `data/sessions/{folder}/.claude/`.
 
-Les CLAUDE.md peuvent devenir volumineux. L'agent est instruits de :
-- Creer des fichiers separes pour les donnees structurees (`customers.md`, `preferences.md`)
-- Decouper les fichiers de plus de 500 lignes en dossiers
-- Maintenir un index des fichiers crees
+## 6.2 SQLite
 
-## 6.2 SQLite (messages.db)
+Chaque instance a sa propre base de donnees SQLite : `store/messages.db`
 
-Chaque instance NanoClaw a sa propre base SQLite dans `store/messages.db`.
+### Tables
 
-### Schema
+| Table               | Role                                            |
+|--------------------|-------------------------------------------------|
+| `chats`            | Metadonnees des conversations (jid, nom, canal) |
+| `messages`         | Tous les messages recus et envoyes              |
+| `scheduled_tasks`  | Taches planifiees (cron, interval, once)        |
+| `task_run_logs`    | Historique d'execution des taches               |
+| `router_state`     | Etat du routeur (last_timestamp, curseurs)      |
+| `sessions`         | Session Claude par groupe (session_id)          |
+| `registered_groups`| Groupes enregistres et leur configuration       |
+
+### Schema des tables principales
 
 ```sql
--- Metadonnees des chats
-CREATE TABLE chats (
-  jid TEXT PRIMARY KEY,      -- Identifiant unique (WhatsApp JID, gmail:xxx, gchat:xxx)
-  name TEXT,                 -- Nom affiche
-  last_message_time TEXT,    -- Dernier message (ISO 8601)
-  channel TEXT,              -- 'whatsapp', 'gmail', 'google-chat'
-  is_group INTEGER DEFAULT 0 -- Groupe ou conversation privee
-);
-
--- Messages complets
+-- Messages
 CREATE TABLE messages (
-  id TEXT,                   -- ID du message
-  chat_jid TEXT,             -- Ref vers chats.jid
-  sender TEXT,               -- Expediteur
-  sender_name TEXT,          -- Nom affiche de l'expediteur
-  content TEXT,              -- Contenu texte
-  timestamp TEXT,            -- Horodatage ISO 8601
-  is_from_me INTEGER,        -- Envoye par l'utilisateur
-  is_bot_message INTEGER DEFAULT 0, -- Envoye par l'agent
+  id TEXT,
+  chat_jid TEXT,
+  sender TEXT,
+  sender_name TEXT,
+  content TEXT,
+  timestamp TEXT,
+  is_from_me INTEGER,
+  is_bot_message INTEGER DEFAULT 0,
   PRIMARY KEY (id, chat_jid)
 );
 
@@ -1102,38 +1077,15 @@ CREATE TABLE scheduled_tasks (
   id TEXT PRIMARY KEY,
   group_folder TEXT NOT NULL,
   chat_jid TEXT NOT NULL,
-  prompt TEXT NOT NULL,       -- Le prompt a executer
-  schedule_type TEXT NOT NULL, -- 'cron', 'interval', 'once'
-  schedule_value TEXT NOT NULL, -- Expression cron, ms, ISO timestamp
-  context_mode TEXT DEFAULT 'isolated',
+  prompt TEXT NOT NULL,
+  schedule_type TEXT NOT NULL,   -- 'cron', 'interval', 'once'
+  schedule_value TEXT NOT NULL,  -- crontab expression, interval ms, ISO date
   next_run TEXT,
   last_run TEXT,
   last_result TEXT,
-  status TEXT DEFAULT 'active',
-  created_at TEXT NOT NULL
-);
-
--- Historique des executions de taches
-CREATE TABLE task_run_logs (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id TEXT NOT NULL,
-  run_at TEXT NOT NULL,
-  duration_ms INTEGER NOT NULL,
-  status TEXT NOT NULL,
-  result TEXT,
-  error TEXT
-);
-
--- Etat du router
-CREATE TABLE router_state (
-  key TEXT PRIMARY KEY,      -- 'last_timestamp', 'last_agent_timestamp'
-  value TEXT NOT NULL
-);
-
--- Sessions Claude par groupe
-CREATE TABLE sessions (
-  group_folder TEXT PRIMARY KEY,
-  session_id TEXT NOT NULL    -- ID de session Claude Code
+  status TEXT DEFAULT 'active',  -- 'active', 'paused', 'completed'
+  created_at TEXT NOT NULL,
+  context_mode TEXT DEFAULT 'isolated'  -- 'group', 'isolated'
 );
 
 -- Groupes enregistres
@@ -1143,250 +1095,1820 @@ CREATE TABLE registered_groups (
   folder TEXT NOT NULL UNIQUE,
   trigger_pattern TEXT NOT NULL,
   added_at TEXT NOT NULL,
-  container_config TEXT,       -- JSON: mounts additionnels, etc.
+  container_config TEXT,
   requires_trigger INTEGER DEFAULT 1,
   is_main INTEGER DEFAULT 0
 );
 ```
 
-### Mode WAL
+## 6.3 Firestore
 
-La base utilise le mode WAL (Write-Ahead Logging) pour :
-- Lectures concurrentes pendant les ecritures
-- Meilleure resilience aux crashes (pas de corruption si le processus est tue)
-
-## 6.3 Firestore (signaux webhook + chat queue)
-
-Firestore est utilise comme **bus de communication asynchrone** entre les services Cloud Run et NanoClaw local :
+Firestore est utilise pour la communication entre les services Cloud Run et NanoClaw.
 
 ### Collections
 
-| Collection | Description |
-|------------|-------------|
-| `gmail-notify/{agent}/signals` | Signaux webhook Gmail (doc par notification) |
-| `chat-queue/{agent}/messages` | Messages Google Chat en attente de traitement |
-| `chat-config/space-mapping` | Mapping espace Google Chat -> agent |
+| Collection            | Usage                                          |
+|----------------------|------------------------------------------------|
+| `nanoclaw-messages`  | Messages Google Chat (par agent/canal)         |
+| `nanoclaw-signals`   | Signaux Gmail webhook (par instance)           |
+| `chat-config`        | Configuration du Chat Gateway                  |
 
-### Pourquoi Firestore et pas Pub/Sub
+### Structure des documents
 
-- Pub/Sub pull necessiterait une librairie supplementaire cote NanoClaw
-- Firestore est deja utilise (via le SDK `@google-cloud/firestore`)
-- Les queries Firestore sont simples (`where('processed', '==', false)`)
-- Pas besoin de gerer des abonnements ou des acknowledgements
-
-## 6.4 Sessions Claude Code
-
-Chaque groupe maintient une **session Claude Code** persistante :
-
-- La session est un identifiant (`session_id`) stocke dans SQLite
-- Quand Claude est invoque, la session precedente est restauree (contexte de conversation)
-- Claude Code gere automatiquement la compaction quand le contexte devient trop long
-- Les fichiers de session sont stockes dans `data/sessions/{groupe}/.claude/`
-- Isoles par groupe (un agent ne peut pas voir la session d'un autre groupe)
-
-### Settings par groupe
-
-Chaque groupe a un `settings.json` dans son `.claude/` avec :
-
+**nanoclaw-messages/{agent}/google-chat** :
 ```json
 {
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
-    "CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD": "1",
-    "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "0"
-  }
+  "spaceId": "spaces/XXX",
+  "spaceName": "Mon Espace",
+  "messageId": "msg_123",
+  "messageName": "spaces/XXX/messages/msg_123",
+  "text": "Hello @Botti",
+  "senderName": "Yacine",
+  "senderEmail": "yacine@bestoftours.co.uk",
+  "senderType": "HUMAN",
+  "createTime": "2026-04-04T10:00:00Z",
+  "agentName": "botti",
+  "yacinePresent": true,
+  "processed": false
 }
 ```
 
-- **Agent Teams** : permet aux agents de lancer des sous-agents (swarms)
-- **Additional Directories CLAUDE.md** : charge les CLAUDE.md des repertoires montes
-- **Auto Memory** : Claude Code memorise les preferences entre sessions
+**nanoclaw-signals/{instance}/gmail-webhook** :
+```json
+{
+  "timestamp": "2026-04-04T10:00:00Z",
+  "historyId": "12345"
+}
+```
+
+**chat-config/space-mapping** :
+```json
+{
+  "spaces/ABC123": "botti",
+  "spaces/DEF456": "sam",
+  "spaces/GHI789": "thais"
+}
+```
+
+## 6.4 Sessions Claude
+
+Chaque groupe maintient une session Claude persistante. L'ID de session est stocke dans
+la table `sessions` de SQLite et passe au container au demarrage. Cela permet a Claude
+de reprendre le contexte d'une conversation precedente.
+
+Les fichiers de session Claude sont stockes dans `data/sessions/{folder}/.claude/` et
+montes dans le container en RW.
+
+## 6.5 Task Scheduler (taches planifiees)
+
+Le task scheduler (`task-scheduler.ts`) execute des taches recurrentes et ponctuelles :
+
+### Types de taches
+
+| Type       | schedule_value                | Exemple                          |
+|-----------|-------------------------------|----------------------------------|
+| `cron`    | Expression crontab            | `0 9 * * 1-5` (9h LUN-VEN)     |
+| `interval`| Intervalle en millisecondes   | `3600000` (toutes les heures)    |
+| `once`    | Date ISO 8601                 | `2026-04-05T10:00:00Z`           |
+
+### Fonctionnement
+
+1. Le scheduler poll la DB toutes les 60s (`SCHEDULER_POLL_INTERVAL`)
+2. Il interroge `getDueTasks()` pour les taches dont `next_run <= now`
+3. Pour chaque tache due, il la met en queue dans la GroupQueue
+4. Le container agent execute la tache avec le prompt configure
+5. Apres execution, `computeNextRun()` calcule la prochaine execution
+6. Les taches `once` passent a `status = 'completed'`
+7. Le resultat est journalise dans `task_run_logs`
+
+### Anti-drift pour les intervalles
+
+Le calcul de `next_run` pour les taches intervalle est ancre sur l'heure prevue
+originale, pas sur `Date.now()`. Cela evite la derive cumulative :
+
+```typescript
+// Ancrage sur le temps prevu, pas sur maintenant
+let next = new Date(task.next_run!).getTime() + ms;
+while (next <= now) {
+  next += ms;  // Saute les executions manquees
+}
+```
+
+### Contexte d'execution
+
+Chaque tache a un `context_mode` :
+- `group` : Execute dans le contexte du groupe (avec la session et la memoire)
+- `isolated` : Execute dans un contexte vierge (pas de session precedente)
+
+### Journalisation
+
+Chaque execution est enregistree dans `task_run_logs` :
+- `task_id` : Reference a la tache
+- `run_at` : Horodatage
+- `duration_ms` : Duree d'execution
+- `status` : `success` ou `error`
+- `result` / `error` : Sortie ou message d'erreur
+
+## 6.6 Conversations (journal)
+
+Les agents creent automatiquement un dossier `conversations/` dans leur workspace
+(`groups/{folder}/conversations/`) pour archiver les conversations passees. C'est un
+fichier Markdown par jour/sujet, consultable par l'agent pour rappeler du contexte.
+
+## 6.6 Daily Spend
+
+Le suivi des couts API est persiste dans `store/daily-spend.json` :
+
+```json
+{
+  "date": "2026-04-04",
+  "input_tokens": 1500000,
+  "output_tokens": 50000,
+  "estimated_usd": 5.25,
+  "limit_hit": false
+}
+```
+
+Reinitialise automatiquement chaque jour.
 
 ---
 
 # 7. Securite
 
-## 7.1 Modele de menaces
+## 7.1 Vue d'ensemble
 
-| Menace | Mitigation | Niveau |
-|--------|-----------|--------|
-| Agent lit les secrets | Credential proxy + .env shadow + mounts ro | Fort |
-| Agent modifie le code source | Mount read-only du projet | Fort |
-| Agent accede aux fichiers d'un autre agent | Mounts isoles par groupe | Fort |
-| Agent escalade via IPC | IPC namespace isole par groupe | Fort |
-| Envoi d'email non autorise | Gmail send allowlist (direct/draft) | Moyen |
-| Message non autorise dans un groupe | Sender allowlist (trigger/drop) | Moyen |
-| Acces non autorise a Botti Voice | OAuth + email allowlist + PIN | Fort |
-| Acces admin au Chat Gateway | Bearer token `ADMIN_API_KEY` | Moyen |
-| Agent depense trop d'API | Daily spend limit dans credential proxy | Moyen |
-| Container s'echappe | Docker Desktop isolation (hyperviseur) | Fort |
-| Mounts arbitraires | Mount allowlist externe (hors projet) | Fort |
+```
++--------------------------------------------------------------+
+|  HOST                                                         |
+|                                                               |
+|  ~/.config/nanoclaw/                                          |
+|    sender-allowlist.json    (qui peut trigger l'agent)        |
+|    mount-allowlist.json     (quels chemins les containers     |
+|                              peuvent voir)                    |
+|    gmail-send-allowlist.json (qui l'agent peut emailer)       |
+|    watchdog-state.json      (etat du watchdog)                |
+|                                                               |
+|  .env                                                         |
+|    ANTHROPIC_API_KEY        (jamais monte dans les containers)|
+|    CLAUDE_CODE_OAUTH_TOKEN  (jamais monte dans les containers)|
+|    REMOTE_CONTROL_PIN       (jamais monte dans les containers)|
+|                                                               |
+|  +----------------------------------------------------------+|
+|  | Credential Proxy (:3001-3004, 127.0.0.1 only)            ||
+|  |  - Injecte API key / OAuth token dans les requetes        ||
+|  |  - Circuit breaker (5 failures -> open for 60s)           ||
+|  |  - Daily spend limiter ($20/jour par defaut)              ||
+|  |  - Containers voient ANTHROPIC_BASE_URL=http://host:PORT  ||
+|  |    mais jamais la vraie API key                            ||
+|  +----------------------------------------------------------+|
++--------------------------------------------------------------+
+         |
+         v
++--------------------------------------------------------------+
+| CONTAINER (Docker)                                            |
+|  --network none     (pas d'acces Internet direct)             |
+|  --rm               (auto-cleanup a la sortie)                |
+|  .env shadow        (/dev/null monte sur .env)                |
+|  Mounts valides     (uniquement les chemins de l'allowlist)   |
++--------------------------------------------------------------+
+```
 
-## 7.2 Credential proxy (isolation des secrets)
+## 7.2 Isolation des credentials
 
-Le credential proxy est la piece maitresse de la securite :
+Les containers n'ont **jamais** acces aux secrets :
 
-1. Les secrets (`ANTHROPIC_API_KEY`, tokens OAuth) sont lus depuis `.env` **uniquement par le proxy**
-2. Le fichier `config.ts` ne lit **aucun secret** -- il lit seulement `ASSISTANT_NAME` et `ASSISTANT_HAS_OWN_NUMBER`
-3. Les containers recoivent `ANTHROPIC_API_KEY=placeholder` ou `CLAUDE_CODE_OAUTH_TOKEN=placeholder`
-4. Le proxy est bind sur `host.docker.internal:{port}` (accessible depuis les containers)
-5. Le `.env` est monte comme `/dev/null` dans le container (shadow mount)
+1. **API Key** : Injectee par le credential proxy, jamais dans les variables d'environnement
+   du container
+2. **.env shadow** : Le fichier `.env` est masque par un mount `/dev/null` -> le container
+   ne peut pas lire les secrets meme si le projet est monte en RO
+3. **OAuth tokens** : Geres par le proxy, jamais exposes
 
-## 7.3 Mounts read-only
+## 7.3 Mount Security (allowlist)
 
-Les fichiers sensibles sont montes en **read-only** :
+Les mounts additionnels du container sont valides par `mount-security.ts` :
 
-- Repertoire du projet (code source) : `ro`
-- Credentials Gmail : `ro`
-- Service account Firebase : `ro`
-- Credentials Workspace CLI : `ro`
-- Memoire globale : `ro` (sauf pour le main group)
+- **Allowlist** : `~/.config/nanoclaw/mount-allowlist.json`
+- **Hot-reload** : Cache TTL de 60 secondes
 
-L'agent peut ecrire uniquement dans :
-- Son dossier de groupe (`/workspace/group`)
-- Son repertoire de session Claude (`/home/node/.claude`)
-- Son repertoire IPC (`/workspace/ipc`)
-- Son agent-runner customise (`/app/src`)
+### Processus de validation
 
-## 7.4 Sender allowlist
+Pour chaque mount additionnel demande :
 
-Le fichier `~/.config/nanoclaw/sender-allowlist.json` controle qui peut declencher les agents :
+1. **Chargement allowlist** : Lit le fichier JSON (cache 60s)
+2. **Validation container path** : Pas de `..`, pas de chemin absolu, non vide
+3. **Expansion du chemin** : `~` -> home directory
+4. **Resolution des symlinks** : `fs.realpathSync()` pour dejouer les traversals
+5. **Verification patterns bloques** : Le chemin reel ne doit contenir aucun pattern bloque
+6. **Verification allowed roots** : Le chemin reel doit etre sous un root autorise
+7. **Calcul readonly effectif** : Forcage en RO si `nonMainReadOnly` ou root sans RW
+
+### Patterns bloques par defaut
+
+```
+.ssh, .gnupg, .gpg, .aws, .azure, .gcloud, .kube, .docker,
+credentials, .env, .netrc, .npmrc, .pypirc, id_rsa, id_ed25519,
+private_key, .secret
+```
+
+L'administrateur peut ajouter des patterns supplementaires dans `blockedPatterns`
+de l'allowlist. Les patterns par defaut sont toujours inclus (merge).
+
+### Format de l'allowlist
 
 ```json
 {
-  "default": {
-    "allow": "*",
-    "mode": "trigger"
-  },
-  "chats": {
-    "group_jid_1": {
-      "allow": ["sender1@s.whatsapp.net", "sender2@s.whatsapp.net"],
-      "mode": "drop"
+  "allowedRoots": [
+    {
+      "path": "~/projects",
+      "allowReadWrite": true,
+      "description": "Development projects"
+    },
+    {
+      "path": "~/Documents/work",
+      "allowReadWrite": false,
+      "description": "Work documents (read-only)"
     }
-  },
-  "logDenied": true
+  ],
+  "blockedPatterns": ["password", "secret", "token"],
+  "nonMainReadOnly": true
 }
 ```
 
-### Deux modes
+### Securite anti-traversal
 
-- **`trigger` mode** : les messages des senders non autorises sont stockes mais ne declenchent pas l'agent (seuls les senders autorises peuvent utiliser @trigger)
-- **`drop` mode** : les messages des senders non autorises sont completement ignores (pas stockes)
+La resolution des symlinks est **obligatoire** avant toute validation. Sans cela,
+un agent pourrait creer un symlink dans son workspace pointant vers `/etc/shadow`
+et demander un mount sur ce symlink. `fs.realpathSync()` resout le chemin reel
+et la validation s'applique sur le chemin final.
 
-### Cache
+## 7.4 Sender Allowlist
 
-L'allowlist est cachee en memoire avec un TTL de 5 secondes pour eviter les lectures disque sur chaque message.
+Controle qui peut declencher l'agent via WhatsApp/Chat :
 
-## 7.5 Gmail draft safety
+- **Fichier** : `~/.config/nanoclaw/sender-allowlist.json`
+- **Modes** :
+  - `trigger` : Le message est stocke mais n'active pas l'agent
+  - `drop` : Le message est purement et simplement ignore
+  - `*` : Tout le monde est autorise
+- **Hot-reload** : Cache TTL de 5 secondes (SENDER_ALLOWLIST_CACHE_TTL_MS)
 
-Le systeme de brouillon pour les emails externes est une mesure de securite deliberee :
+## 7.5 Gmail Send Safety
 
-- Les agents ne peuvent **jamais** envoyer directement un email a un destinataire inconnu
-- Seuls les destinataires dans la `direct_send` list recoivent des emails directs
-- Pour tous les autres, un brouillon est cree et Yacine est notifie
-- Cela empeche l'agent d'envoyer des emails inappropries a des clients ou partenaires externes
+L'envoi d'email par les agents est doublement securise :
+
+1. **Allowlist externe** : `~/.config/nanoclaw/gmail-send-allowlist.json`
+   - `direct_send` : Liste des emails a qui l'agent peut envoyer directement
+   - `notify_email` : Email de notification quand l'agent cree un brouillon
+   - `cc_email` : CC automatique sur les emails sortants
+
+2. **Draft mode** : Pour les destinataires hors allowlist, l'agent cree un brouillon
+   au lieu d'envoyer directement, et notifie `notify_email` pour revue manuelle
 
 ## 7.6 Remote Control PIN
 
-Le main group supporte des commandes `/remote-control` protegees par PIN :
+La commande `/remote-control` (qui donne acces a Claude Code sur le host) est protegee
+par un PIN :
 
-- `REMOTE_CONTROL_PIN` dans `.env` (ou variable d'environnement)
-- Si le PIN n'est pas configure, le remote control est desactive
-- Seul le main group peut utiliser cette commande
-- Le PIN doit etre fourni dans la commande : `/remote-control <PIN>`
+- Configure via `REMOTE_CONTROL_PIN` dans `.env`
+- Minimum 4 caracteres
+- Si non configure, le Remote Control est **desactive**
+- Seul le main group peut l'utiliser
+- Usage : `/remote-control <PIN>` dans WhatsApp
 
-## 7.7 Chat Gateway admin auth
+## 7.7 Chat Gateway Authentication
 
-L'endpoint admin du Chat Gateway (`POST /admin/map-space`) est protege par un bearer token :
+Le Chat Gateway (Cloud Run) a deux niveaux d'auth :
 
-```
-Authorization: Bearer <ADMIN_API_KEY>
-```
+1. **Verification token** : `CHAT_VERIFICATION_TOKEN` pour valider les webhooks Google Chat
+2. **Admin API key** : `ADMIN_API_KEY` pour les endpoints d'administration
 
-Si `ADMIN_API_KEY` n'est pas configure, l'endpoint retourne HTTP 503.
+## 7.8 IPC Rate Limiting
 
-## 7.8 Gmail send allowlist externe
+Le systeme IPC (file-based IPC entre le host et les containers) est limite :
 
-L'allowlist d'envoi Gmail est stockee **en dehors** du repertoire du projet :
+- Maximum 20 taches actives par groupe (MAX_TASKS_PER_GROUP)
+- Previent les agents de creer des boucles infinies de taches
 
-```
-~/.config/nanoclaw/gmail-send-allowlist.json
-```
+## 7.9 Session ID Redaction
 
-Ce fichier n'est **pas monte** dans les containers. Il est lu uniquement par le canal Gmail dans le processus NanoClaw (hors container). Un agent ne peut donc pas modifier sa propre allowlist.
+Les IDs de session sont automatiquement masques dans les logs structurs :
 
-## 7.9 Regles d'acces Google Chat
-
-Le Chat Gateway verifie la presence de Yacine dans les espaces Google Chat :
-
-- Les messages dans des espaces ou `yacinePresent === false` sont ignores
-- Le cache de presence a un TTL de 1 heure
-- Par defaut, les espaces sont consideres comme ayant Yacine present (securite permissive)
-
-## 7.10 Mount allowlist
-
-Les mounts additionnels (via `containerConfig.additionalMounts`) sont valides contre une allowlist externe :
-
-```
-~/.config/nanoclaw/mount-allowlist.json
+```typescript
+const logger = pino({
+  redact: ['sessionId', 'newSessionId', 'session_id'],
+});
 ```
 
-Seuls les chemins presents dans cette allowlist peuvent etre montes. Ce fichier est stocke hors du projet et n'est pas accessible depuis les containers.
+Cela empeche les IDs de session d'apparaitre dans les logs en clair.
 
-## 7.11 Daily spend limit
+## 7.10 Anti-spam
 
-Le credential proxy impose une limite de depenses journalieres :
+L'anti-spam protege contre les boucles d'erreurs :
 
-- Par defaut : 20$ USD/jour (`DAILY_API_LIMIT_USD`)
-- Estimation basee sur les tokens input/output
-- Quand la limite est atteinte, les requetes API sont bloquees (HTTP 429)
-- Reset automatique a minuit
-- Les donnees de tracking sont stockees dans `store/daily-spend.json`
+- Detection des erreurs de rate limit (patterns : `hit your limit`, `rate_limit`, `429`, `overloaded`)
+- Cooldown de 4 heures par JID entre les notifications d'erreur (ERROR_COOLDOWN_MS)
+- Nettoyage des entrees obsoletes (>7 jours, STALE_ENTRY_MS)
+- Message de fallback : "Je suis temporairement indisponible. Je reviens des que possible."
+
+## 7.11 Network Isolation
+
+Les containers Docker tournent avec `--network none` : aucun acces direct a Internet.
+La seule connexion reseau autorisee est vers le credential proxy sur le host via
+`host.docker.internal:{port}`.
 
 ---
 
-# 8. Infrastructure
+# 8. Observabilite
 
-## 8.1 Mac Mini
+## 8.1 Health Endpoint
 
-### Specifications
+Chaque instance expose un endpoint `/health` sur son port de credential proxy :
 
-| Aspect | Detail |
-|--------|--------|
-| Modele | Mac Mini (Apple Silicon) |
-| OS | macOS 15 (Darwin 25.3.0) |
-| Utilisateur | `boty` |
-| Home | `/Users/boty` |
-| Node.js | 22.x (via Homebrew) |
-| Docker | Docker Desktop pour Mac |
-| Emplacement | Bureau (Entraigues-sur-la-Sorgue) |
+```bash
+curl http://localhost:3001/health
+```
 
-### Pourquoi ce choix
+Reponse :
+```json
+{
+  "status": "ok",
+  "assistant": "Botti",
+  "channels": ["whatsapp", "gmail", "google-chat"],
+  "groups": 3,
+  "uptime": 86400
+}
+```
 
-1. **Apple Silicon** : excellent rapport performance/watt, Docker tourne nativement via Apple Hypervisor
-2. **Always-on** : conception silencieuse, consommation faible, ideal pour serveur permanent
-3. **WhatsApp** : Baileys necessite une IP stable pour eviter les bans
-4. **Cout** : machine deja achetee, cout d'exploitation quasi nul
-5. **Securite** : secrets sur disque local, pas dans le cloud
+## 8.2 Prometheus Metrics
 
-## 8.2 launchd (gestion des services)
+Chaque instance expose un endpoint `/metrics` au format Prometheus text exposition :
 
-macOS utilise **launchd** (pas systemd) pour gerer les services. Chaque agent a un fichier `.plist` dans `~/Library/LaunchAgents/`.
+```bash
+curl http://localhost:3001/metrics
+```
 
-### Services enregistres
+### Counters
 
-| Service | Fichier plist | Description |
-|---------|--------------|-------------|
-| `com.nanoclaw` | `com.nanoclaw.plist` | Botti (agent principal) |
-| `com.nanoclaw.sam` | `com.nanoclaw.sam.plist` | Sam |
-| `com.nanoclaw.thais` | `com.nanoclaw.thais.plist` | Thais |
-| `com.nanoclaw.alan` | `com.nanoclaw.alan.plist` | Alan |
-| `com.nanoclaw.dashboard` | `com.nanoclaw.dashboard.plist` | Dashboard web |
-| `com.nanoclaw.logrotate` | `com.nanoclaw.logrotate.plist` | Rotation des logs |
+| Metrique                             | Description                         | Labels                |
+|-------------------------------------|-------------------------------------|-----------------------|
+| `nanoclaw_messages_received_total`  | Messages recus par canal            | `channel`             |
+| `nanoclaw_messages_processed_total` | Messages traites par groupe         | `group`               |
+| `nanoclaw_containers_spawned_total` | Containers agents lances            | --                    |
+| `nanoclaw_container_errors_total`   | Erreurs de containers               | --                    |
+| `nanoclaw_emails_filtered_total`    | Emails filtres par raison           | `reason`              |
+| `nanoclaw_api_requests_total`       | Requetes API proxy par statut       | `status`              |
 
-### Structure d'un plist
+### Gauges
 
-Exemple pour Sam (`com.nanoclaw.sam.plist`) :
+| Metrique                             | Description                         | Labels                |
+|-------------------------------------|-------------------------------------|-----------------------|
+| `nanoclaw_active_containers`        | Containers en cours d'execution     | --                    |
+| `nanoclaw_registered_groups`        | Nombre de groupes enregistres       | --                    |
+| `nanoclaw_uptime_seconds`           | Uptime du processus                 | --                    |
+| `nanoclaw_circuit_breaker_state`    | Etat du circuit breaker (1=actif)   | `state`               |
+
+### Histograms
+
+| Metrique                                  | Description                   | Buckets                              |
+|------------------------------------------|-------------------------------|--------------------------------------|
+| `nanoclaw_container_duration_seconds`    | Duree d'execution container   | 1, 5, 10, 30, 60, 120, 300, 600, 1800 |
+| `nanoclaw_api_request_duration_seconds`  | Latence requetes API proxy    | 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30   |
+| `nanoclaw_gmail_poll_duration_seconds`   | Duree du poll Gmail           | 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2    |
+| `nanoclaw_gchat_poll_duration_seconds`   | Duree du poll Google Chat     | 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2    |
+| `nanoclaw_firestore_signal_check_seconds`| Duree check signal Firestore  | 0.01, 0.05, 0.1, 0.25, 0.5, 1, 2    |
+
+### Implementation
+
+Les metriques sont implementees sans dependance externe dans `src/metrics.ts`. Le registre
+est en memoire et formate les metriques en texte Prometheus a chaque requete `/metrics`.
+
+## 8.3 Dashboard
+
+Le dashboard est un serveur HTTP minimal (Node.js, CommonJS) sur le port 3100 qui :
+
+- Decouvre automatiquement toutes les instances NanoClaw
+- Appelle `/health` sur chaque instance
+- Affiche l'etat en temps reel dans une page HTML
+- Pas de framework frontend, HTML/CSS/JS inline
+
+```bash
+curl http://localhost:3100
+```
+
+Launchd service : `com.nanoclaw.dashboard`
+
+## 8.4 Watchdog
+
+Le watchdog est un script bash (`scripts/watchdog.sh`) execute toutes les 5 minutes
+par launchd. Il :
+
+1. Fait un health check sur chaque port (3001, 3002, 3003, 3004)
+2. Compare avec le service launchd correspondant
+3. Si un agent est down, envoie une alerte via WhatsApp (via l'instance Botti)
+4. Cooldown de 30 minutes entre les alertes pour le meme agent
+5. Detecte les retablissements et envoie un message "recovered"
+6. Etat persiste dans `~/.config/nanoclaw/watchdog-state.json`
+
+Launchd service : `com.nanoclaw.watchdog`
+
+## 8.5 Structured Logging
+
+Tous les logs sont structures en JSON via Pino :
+
+```json
+{
+  "level": 30,
+  "time": 1712232000000,
+  "msg": "Processing messages",
+  "group": "gmail_main",
+  "messageCount": 3
+}
+```
+
+**Configuration** :
+- Niveau par defaut : `info` (configurable via `LOG_LEVEL`)
+- En mode TTY (developpement) : `pino-pretty` avec couleurs
+- En production : JSON brut sur stdout
+- Redaction automatique : `sessionId`, `newSessionId`, `session_id`
+- Erreurs non rattrapees : routees via Pino pour les timestamps
+
+**Rotation** : Le script `scripts/rotate-logs.sh` tourne quotidiennement a 3h du matin :
+- Retention : 7 jours pour les logs normaux
+- Retention : 14 jours pour les logs de containers
+
+Launchd service : `com.nanoclaw.logrotate`
+
+---
+
+# 9. Tests
+
+## 9.1 Vue d'ensemble
+
+| Type              | Fichiers | Tests  | Framework |
+|------------------|----------|--------|-----------|
+| Unit             | ~20      | ~380   | Vitest    |
+| Integration      | ~5       | ~80    | Vitest    |
+| E2E Docker       | 1        | ~40    | Vitest    |
+| Stress           | ~2       | ~14    | Vitest    |
+| **Total**        | **28**   | **514**| **Vitest** |
+
+## 9.2 Tests unitaires
+
+Les tests unitaires couvrent chaque module individuellement :
+
+| Fichier                          | Ce qui est teste                            |
+|---------------------------------|---------------------------------------------|
+| `backoff.test.ts`               | Calcul du backoff exponentiel               |
+| `credential-proxy.test.ts`      | Circuit breaker, daily spend, proxy logic   |
+| `container-runner.test.ts`      | Build args, volume mounts, output parsing   |
+| `container-runtime.test.ts`     | Detection runtime, orphan cleanup           |
+| `db.test.ts`                    | Operations SQLite, schema, migrations       |
+| `group-folder.test.ts`          | Validation des noms de dossiers groupes     |
+| `group-queue.test.ts`           | Concurrence, retries, shutdown              |
+| `formatting.test.ts`            | Formatage des messages, XML escaping        |
+| `ipc-auth.test.ts`              | Auth IPC, rate limiting                     |
+| `remote-control.test.ts`        | PIN auth, start/stop, URL parsing           |
+| `routing.test.ts`               | Routage messages, formatage sortant         |
+| `sender-allowlist.test.ts`      | Modes trigger/drop, hot-reload              |
+| `task-scheduler.test.ts`        | Cron parsing, execution, retries            |
+| `timezone.test.ts`              | Injection timezone                          |
+| `channels/gmail.test.ts`        | Filtrage email, webhook, polling            |
+| `channels/google-chat.test.ts`  | Polling Firestore, envoi Chat API           |
+| `channels/registry.test.ts`     | Auto-enregistrement des canaux              |
+| `channels/whatsapp.test.ts`     | Messages, reactions, media                  |
+
+## 9.3 Tests E2E Docker
+
+Le fichier `src/e2e/container-e2e.test.ts` teste l'isolation reelle du container :
+
+- `.env` est shadow par `/dev/null`
+- Le container tourne en non-root
+- Les repertoires workspace existent
+- Les repertoires IPC sont accessibles en ecriture
+- `ANTHROPIC_BASE_URL` pointe vers le proxy
+- `host.docker.internal` est resolvable
+- Le container peut faire des requetes HTTP vers le host
+- Les orphelins sont nettoyes correctement
+- Node.js, npm, Claude CLI, Chromium, git sont disponibles
+- La timezone est respectee
+
+## 9.4 Tests d'integration
+
+Les tests d'integration dans `src/integration/` testent l'interaction entre modules :
+
+- Message loop + group queue + message processor
+- Channel manager + database + routing
+- IPC watcher + task scheduler
+
+## 9.5 Comment lancer les tests
+
+```bash
+# Tous les tests
+npm test
+
+# Watch mode (re-execute sur modification)
+npm run test:watch
+
+# Tests specifiques
+npx vitest run src/credential-proxy.test.ts
+
+# Tests E2E (necessite Docker running)
+npx vitest run src/e2e/
+
+# Avec couverture
+npx vitest run --coverage
+```
+
+## 9.6 Ce qui n'est PAS couvert
+
+- Tests de charge realistes (100+ messages simultanes)
+- Tests d'integration Cloud Run (Botti Voice, Chat Gateway)
+- Tests d'acceptation utilisateur (manuels)
+- Tests de performance de l'API Anthropic
+- Tests Python (botti-voice, chat-gateway) -- pas dans la suite Vitest
+
+---
+
+# 10. Infrastructure
+
+## 10.1 Mac Mini
+
+| Composant         | Specification                                    |
+|------------------|--------------------------------------------------|
+| Machine          | Mac Mini (Apple Silicon)                         |
+| OS               | macOS Darwin 25.3.0                              |
+| Node.js          | >= 20 (via Homebrew)                             |
+| Docker           | Docker Desktop for Mac                           |
+| SQLite           | better-sqlite3 (natif, compile a l'install)      |
+| Process manager  | launchd (natif macOS)                            |
+
+## 10.2 Services launchd
+
+Tous les plists sont dans `~/Library/LaunchAgents/` :
+
+| Service                       | Role                              | Planification        |
+|------------------------------|-----------------------------------|-----------------------|
+| `com.nanoclaw`               | Botti (instance principale)       | KeepAlive, RunAtLoad |
+| `com.nanoclaw.sam`           | Sam                               | KeepAlive, RunAtLoad |
+| `com.nanoclaw.thais`         | Thais                             | KeepAlive, RunAtLoad |
+| `com.nanoclaw.alan`          | Alan                              | KeepAlive, RunAtLoad |
+| `com.nanoclaw.dashboard`     | Dashboard monitoring (port 3100)  | KeepAlive, RunAtLoad |
+| `com.nanoclaw.watchdog`      | Health check alerting             | Toutes les 5 min     |
+| `com.nanoclaw.backup`        | Backup GCS                        | 4h00 chaque jour     |
+| `com.nanoclaw.logrotate`     | Rotation des logs                 | 3h00 chaque jour     |
+
+### Commandes de gestion
+
+```bash
+# Lister les services NanoClaw
+launchctl list | grep nanoclaw
+
+# Redemarrer un agent
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw        # Botti
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw.sam     # Sam
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw.thais   # Thais
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw.alan    # Alan
+
+# Arreter un agent
+launchctl bootout gui/$(id -u)/com.nanoclaw.sam
+
+# Demarrer un agent
+launchctl load ~/Library/LaunchAgents/com.nanoclaw.sam.plist
+
+# Voir les logs
+tail -f ~/nanoclaw/logs/nanoclaw.log | jq .
+tail -f ~/nanoclaw-sam/logs/nanoclaw.log | jq .
+```
+
+## 10.3 Services Cloud Run
+
+| Service           | Framework | Langage | Role                              |
+|------------------|-----------|---------|-----------------------------------|
+| Botti Voice      | FastAPI   | Python  | Audio vocal (Gemini Live),        |
+|                  |           |         | webhook Gmail, agent selector     |
+| Chat Gateway     | FastAPI   | Python  | Webhook Google Chat,              |
+|                  |           |         | Firestore writer, rate limiter    |
+
+## 10.4 GCP Services
+
+| Service           | Role                                             |
+|------------------|--------------------------------------------------|
+| Firestore        | Messages Google Chat, signaux Gmail, config      |
+| Pub/Sub          | Notifications push Gmail (`gmail-push` topic)    |
+| GCS              | Backups quotidiens (`gs://nanoclaw-backups-adp`) |
+| Cloud Run        | Botti Voice, Chat Gateway                        |
+| Gmail API        | Envoi/reception emails                           |
+| Chat API         | Envoi de reponses dans Google Chat               |
+| Calendar API     | Lecture/ecriture agenda                          |
+| Drive API        | Lecture de fichiers                              |
+
+## 10.5 Docker Desktop
+
+- Image : `nanoclaw-agent:latest`
+- Build : `./container/build.sh`
+- Runtime : Docker Desktop for Mac
+- Reseau container : `--network none`
+- Cleanup : `--rm` (auto-supprime)
+- Host gateway : `host.docker.internal`
+
+## 10.6 Structure des repertoires
+
+```
+~/nanoclaw/                         <- Instance principale (Botti)
+  .env                              <- Config + secrets
+  package.json                      <- v2.0.0, dependances
+  src/                              <- Code source TypeScript
+  dist/                             <- Compile JavaScript
+  container/                        <- Dockerfile, build.sh, skills
+  groups/                           <- Dossiers de memoire par groupe
+  data/                             <- Sessions, IPC, WhatsApp auth
+  store/                            <- SQLite DB, daily spend
+  logs/                             <- Logs (pino JSON)
+  scripts/                          <- backup.sh, watchdog.sh, rotate-logs.sh
+  dashboard/                        <- server.cjs (port 3100)
+  chat-gateway/                     <- server.py (Cloud Run)
+  botti-voice/                      <- web/ (Cloud Run)
+  docs/                             <- ARCHITECTURE.md, etc.
+  create-agent.sh                   <- Script creation d'agent
+  deploy.sh                         <- Build + distribution dist/
+  node_modules/                     <- Dependances (partagees via symlink)
+
+~/nanoclaw-sam/                     <- Instance Sam
+  .env
+  dist/                             <- Copie (pas symlink)
+  groups/gmail_main/                <- Memoire Sam
+  data/
+  store/
+  logs/
+  container -> ~/nanoclaw/container <- Symlink
+  node_modules -> ~/nanoclaw/...    <- Symlink
+  package.json -> ~/nanoclaw/...    <- Symlink
+  src -> ~/nanoclaw/src             <- Symlink
+
+~/nanoclaw-thais/                   <- Instance Thais (meme structure que Sam)
+~/nanoclaw-alan/                    <- Instance Alan (meme structure que Sam)
+
+~/.config/nanoclaw/                 <- Config de securite (hors projet)
+  mount-allowlist.json
+  sender-allowlist.json
+  gmail-send-allowlist.json
+  watchdog-state.json
+
+~/.gmail-mcp-sam/                   <- Credentials Gmail Sam
+  credentials.json
+  gcp-oauth.keys.json
+~/.gmail-mcp-thais/                 <- Credentials Gmail Thais
+~/.gmail-mcp-alan/                  <- Credentials Gmail Alan
+~/.firebase-mcp/
+  adp-service-account.json          <- Service account Firestore/Chat
+```
+
+---
+
+# 11. Operations
+
+## 11.1 deploy.sh
+
+Le script `deploy.sh` compile le TypeScript et distribue le `dist/` a toutes les instances :
+
+```bash
+./deploy.sh            # Build + copie dist/
+./deploy.sh --restart  # Build + copie + restart tous les services
+```
+
+**Fonctionnement** :
+1. `npm run build` -- compile TypeScript -> `dist/`
+2. Pour chaque instance (sam, thais, alan) :
+   - Supprime l'ancien `dist/` (symlink ou directory)
+   - Copie le nouveau `dist/`
+3. Si `--restart` : kickstart tous les services launchd
+
+**Important** : `dist/` est une **copie**, pas un symlink. C'est un choix delibere pour
+eviter que les instances secondaires chargent du code en cours de compilation.
+
+## 11.2 create-agent.sh
+
+Script automatise de creation d'un nouvel agent en **15 etapes** :
+
+```bash
+./create-agent.sh alan ala@bestoftours.co.uk --port 3004
+./create-agent.sh marie marie@bestoftours.co.uk  # port auto-detecte
+```
+
+**Les 15 etapes** :
+
+1. **Validate inputs** : Nom (lowercase alpha), email (contient @)
+2. **Determine port** : Scan des plists existants, auto-detection du port libre (3001-3010)
+3. **Read API key** : Copie la `ANTHROPIC_API_KEY` de l'instance principale
+4. **Create directory structure** : `groups/gmail_main`, `data`, `logs`, `store`
+5. **Create symlinks** : `container`, `node_modules`, `package.json`, `src`
+6. **Copy dist/** : Copie reelle (pas symlink)
+7. **Create .env** : Avec le port, le modele, les configs Google Chat/Gmail
+8. **Set up Gmail OAuth** : Copie les keys OAuth, lance le flow OAuth dans le navigateur,
+   echange le code pour un refresh token, sauve `credentials.json`
+9. **Create launchd plist** : Genere le fichier `.plist` avec toutes les variables d'environnement
+10. **Create CLAUDE.md** : Genere la memoire initiale de l'agent avec le template
+11. **Register in DB** : Initialise SQLite avec le schema, insere le groupe `gmail:main`
+12. **Update deploy.sh** : Ajoute l'instance au tableau `INSTANCES`
+13. **Chat gateway reminder** : Rappel d'ajouter l'agent a `VALID_AGENTS` dans le gateway
+14. **Load and start service** : `launchctl load` le plist
+15. **Verify** : Verifie que le service tourne, affiche les logs
+
+## 11.3 backup.sh
+
+Backup quotidien a 4h du matin vers Google Cloud Storage :
+
+```bash
+# Execute automatiquement par launchd
+# Peut aussi etre lance manuellement
+./scripts/backup.sh
+```
+
+**Ce qui est sauvegarde** :
+- Bases de donnees SQLite (via `.backup` pour la consistance)
+- Fichiers `.env` de chaque instance
+- Dossiers `groups/` (memoire des agents)
+- Fichiers de configuration de securite (`~/.config/nanoclaw/`)
+- Credentials Gmail (`~/.gmail-mcp-*/credentials.json`)
+
+**Configuration** :
+- Bucket : `gs://nanoclaw-backups-adp`
+- Retention : 30 jours
+- Logs : `~/nanoclaw/logs/backup.log`
+
+Launchd service : `com.nanoclaw.backup`
+
+## 11.4 Rotation des logs
+
+Le script `scripts/rotate-logs.sh` tourne quotidiennement a 3h du matin :
+
+- Logs normaux : retention 7 jours
+- Logs containers : retention 14 jours
+- Suppression des fichiers rotatifs anciens
+
+Launchd service : `com.nanoclaw.logrotate`
+
+## 11.5 Watchdog
+
+Le watchdog (`scripts/watchdog.sh`) tourne toutes les 5 minutes :
+
+1. Health check HTTP sur les ports 3001, 3002, 3003, 3004
+2. Si un agent est down :
+   - Envoie une alerte WhatsApp via Botti
+   - Cooldown de 30 minutes entre alertes pour le meme agent
+3. Si un agent revient :
+   - Envoie un message "recovered" via WhatsApp
+4. Etat persiste dans `~/.config/nanoclaw/watchdog-state.json`
+
+Launchd service : `com.nanoclaw.watchdog`
+
+## 11.6 Message Loop (boucle de polling)
+
+Le Message Loop (`message-loop.ts`) est le coeur du systeme de detection des messages.
+
+### Algorithme
+
+```
+Toutes les 2 secondes (POLL_INTERVAL) :
+  1. Interroger SQLite pour les messages plus recents que lastTimestamp
+  2. Pour chaque groupe avec de nouveaux messages :
+     a. Verifier si c'est un main group (pas de trigger requis)
+     b. Sinon, verifier si un trigger @NomAgent est present
+     c. Verifier que l'expediteur est autorise (sender allowlist)
+     d. Si un container actif existe pour ce groupe :
+        -> Piper le message via IPC (queue.sendMessage)
+     e. Sinon :
+        -> Mettre en queue (queue.enqueueMessageCheck)
+  3. Avancer le curseur lastTimestamp
+  4. Sauvegarder l'etat dans SQLite
+```
+
+### Gestion des curseurs
+
+Deux curseurs independants :
+
+- **lastTimestamp** : Dernier timestamp lu depuis la DB (par le message loop)
+- **lastAgentTimestamp[chatJid]** : Dernier timestamp traite par l'agent pour ce groupe
+
+La separation permet de detecter les messages meme si l'agent n'a pas encore termine
+de traiter le lot precedent.
+
+### Startup Recovery
+
+Au demarrage, `recoverPendingMessages()` verifie s'il y a des messages non traites :
+
+```
+Pour chaque groupe enregistre :
+  1. Lire les messages depuis lastAgentTimestamp[chatJid]
+  2. Si il y en a -> enqueue le groupe pour traitement
+```
+
+Cela gere le cas ou NanoClaw a crashe entre l'avancement du curseur et le traitement
+effectif des messages.
+
+### Deduplication
+
+Les messages sont dedupliques par groupe : meme si 5 messages arrivent pour le meme
+groupe pendant un cycle de polling, un seul `enqueueMessageCheck` est emis.
+
+## 11.7 Commandes de diagnostic
+
+```bash
+# Etat de tous les services
+launchctl list | grep nanoclaw
+
+# Health check d'un agent
+curl -s http://localhost:3001/health | jq .
+
+# Metriques Prometheus
+curl -s http://localhost:3001/metrics
+
+# Containers Docker actifs
+docker ps --filter "name=nanoclaw"
+
+# Logs en direct (formate)
+tail -f ~/nanoclaw/logs/nanoclaw.log | jq .
+
+# Derniers logs d'erreur
+tail -20 ~/nanoclaw/logs/nanoclaw.error.log
+
+# Verifier la DB
+sqlite3 ~/nanoclaw/store/messages.db ".tables"
+sqlite3 ~/nanoclaw/store/messages.db "SELECT count(*) FROM messages;"
+
+# Verifier le spend quotidien
+cat ~/nanoclaw/store/daily-spend.json | jq .
+
+# Rebuild container
+./container/build.sh
+
+# Build + deploy
+./deploy.sh --restart
+```
+
+## 11.7 Procedure de redemarrage
+
+### Redemarrer un agent
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw.sam
+```
+
+### Redemarrer tous les agents
+
+```bash
+./deploy.sh --restart
+```
+
+### Redemarrer apres une mise a jour du code
+
+```bash
+# 1. Compiler
+npm run build
+
+# 2. Distribuer et redemarrer
+./deploy.sh --restart
+
+# 3. Verifier
+curl http://localhost:3001/health
+curl http://localhost:3002/health
+curl http://localhost:3003/health
+curl http://localhost:3004/health
+```
+
+### Redemarrer apres un crash
+
+```bash
+# 1. Verifier l'etat
+launchctl list | grep nanoclaw
+
+# 2. Verifier les logs
+tail -50 ~/nanoclaw/logs/nanoclaw.error.log
+
+# 3. Nettoyer les containers orphelins
+docker rm -f $(docker ps -q --filter "name=nanoclaw")
+
+# 4. Redemarrer
+launchctl kickstart -k gui/$(id -u)/com.nanoclaw
+```
+
+---
+
+# 12. Stack technique
+
+| Technologie                  | Version    | Usage                               |
+|------------------------------|-----------|--------------------------------------|
+| **Node.js**                  | >= 20     | Runtime principal                    |
+| **TypeScript**               | 5.7       | Langage principal                    |
+| **Python**                   | 3.x       | Botti Voice, Chat Gateway            |
+| **FastAPI**                  | -         | Chat Gateway, Botti Voice API        |
+| **Claude Agent SDK**         | via CLI   | Intelligence agent (dans containers) |
+| **Claude Code CLI**          | latest    | Claude Code dans les containers      |
+| **Gemini Live API**          | v1beta    | Audio vocal (Botti Voice)            |
+| **Gemini 2.5 Flash**        | native-audio | Modele audio                      |
+| **Claude Opus 4.6**         | -         | Modele agent par defaut              |
+| **SQLite** (better-sqlite3)  | 11.8      | Base de donnees locale               |
+| **Firestore**                | 8.3       | Communication Cloud Run <-> NanoClaw |
+| **Docker**                   | Desktop   | Isolation containers agent           |
+| **Baileys**                  | 7.0.0-rc9 | Client WhatsApp Web                 |
+| **googleapis**               | 144.0     | Gmail, Calendar, Drive, Chat API     |
+| **Pino**                     | 9.6       | Logging structure JSON               |
+| **Zod**                      | 4.3       | Validation des variables d'env       |
+| **cron-parser**              | 5.5       | Parsing expressions cron             |
+| **Vitest**                   | 4.0       | Framework de tests                   |
+| **Prettier**                 | 3.8       | Formatage du code                    |
+| **Husky**                    | 9.1       | Pre-commit hooks                     |
+| **tsx**                      | 4.19      | Execution TypeScript directe (dev)   |
+| **launchd**                  | (macOS)   | Gestionnaire de processus            |
+| **Google Cloud SDK**         | (gcloud)  | Backups GCS, deploys Cloud Run       |
+| **Chromium**                 | (headless)| Navigation web dans les containers   |
+
+---
+
+# 13. Decisions architecturales
+
+## 13.1 Pourquoi Node.js
+
+- Event-driven, parfait pour du polling et des WebSockets
+- Baileys (WhatsApp) est une lib Node.js
+- googleapis est une lib Node.js mature
+- Un seul langage pour le core (TypeScript)
+- Performance suffisante pour 4 agents
+
+## 13.2 Pourquoi Docker (et pas Apple Container)
+
+- Portabilite : meme image sur Mac et Linux
+- Docker Desktop est stable sur macOS
+- `--network none` pour l'isolation reseau
+- `host.docker.internal` pour la communication avec le host
+- Apple Container est supporte (skill `/convert-to-apple-container`) mais Docker est le defaut
+
+## 13.3 Pourquoi polling + webhook
+
+Le polling est le mode de base car il est simple et fiable. Les webhooks sont un
+**complement** pour reduire la latence :
+
+- Gmail : webhook via Pub/Sub reduit la latence de detection de ~60s a ~5s
+- Google Chat : webhook obligatoire (Chat App), Firestore comme bus de messages
+- WhatsApp : temps reel via WebSocket natif (pas de polling)
+
+Le fallback polling est toujours present pour gerer les cas ou le webhook echoue.
+
+## 13.4 Pourquoi Firestore
+
+- Seul datastore accessible a la fois depuis Cloud Run et le Mac Mini local
+- Gratuit pour le volume de donnees concerne (<1 GB)
+- Temps reel (pourrait utiliser onSnapshot, mais on poll pour simplifier)
+- Pas de VPN ou tunnel necessaire
+
+## 13.5 Pourquoi un seul Chat App
+
+Google Workspace ne permet qu'un nombre limite de Chat Apps par organisation.
+Plutot que de creer un Chat App par agent, on a un seul Chat App ("Botti") qui
+route les messages vers le bon agent via le mapping Firestore.
+
+## 13.6 Pourquoi Gemini pour la voix
+
+- Gemini Live supporte l'audio natif bidirectionnel
+- Claude ne supporte pas encore l'audio en streaming
+- Gemini 2.5 Flash est rapide et peu couteux pour le vocal
+- La memoire NanoClaw est chargee dans le prompt Gemini
+
+## 13.7 Pourquoi Claude pour les agents
+
+- Claude Agent SDK / Claude Code donne un agent complet avec outils
+- Meilleur raisonnement et suivi d'instructions que les alternatives
+- Modele Opus 4.6 pour la qualite maximale
+- Support natif des sessions persistantes
+
+## 13.8 Pourquoi Mac Mini
+
+- Zero cout recurrent (machine deja achetee)
+- WhatsApp via Baileys est plus stable en local (pas de risque IP data center)
+- Apple Silicon performant pour les charges locales
+- Controle total (disque, reseau, configurations)
+
+## 13.9 Pourquoi split index.ts
+
+Le fichier `index.ts` original faisait >500 lignes et melangeait trop de responsabilites.
+Le split en 4 modules ameliore :
+
+- **Lisibilite** : Chaque fichier a une seule responsabilite
+- **Testabilite** : Les modules peuvent etre testes individuellement
+- **Maintenabilite** : Modifications localisees sans risque de casser d'autres parties
+
+| Module                 | Responsabilite                               |
+|-----------------------|----------------------------------------------|
+| `index.ts`            | Orchestrateur, wiring, startup, shutdown     |
+| `state.ts`            | Gestion de l'etat (timestamps, sessions)     |
+| `message-processor.ts`| Traitement des messages, spawn containers    |
+| `channel-manager.ts`  | Init canaux, callbacks, remote control       |
+
+## 13.10 Pourquoi constants.ts
+
+Les magic numbers etaient disperses dans le code. `constants.ts` centralise toutes les
+constantes numeriques par domaine :
+
+- Anti-spam : `ERROR_COOLDOWN_MS`, `STALE_ENTRY_MS`
+- Group queue : `GROUP_QUEUE_MAX_RETRIES`, `GROUP_QUEUE_BASE_RETRY_MS`
+- Circuit breaker : `CIRCUIT_BREAKER_THRESHOLD`, `CIRCUIT_BREAKER_RESET_MS`
+- Gmail : `FIRESTORE_SIGNAL_POLL_MS`, `GMAIL_WEBHOOK_FALLBACK_POLL_MS`
+- Google Chat : `GOOGLE_CHAT_POLL_MS`
+- IPC : `MAX_TASKS_PER_GROUP`
+
+Avantage : un seul endroit pour voir et modifier toutes les constantes.
+
+## 13.11 Pourquoi le circuit breaker
+
+Sans circuit breaker, si l'API Anthropic tombe :
+1. Chaque container fait des requetes qui echouent
+2. Les timeouts s'accumulent
+3. Les containers s'empilent
+4. La machine est saturee
+
+Avec le circuit breaker :
+1. Apres 5 echecs consecutifs, le proxy coupe (503 immediat)
+2. 60 secondes de pause
+3. Un probe unique teste si le service est revenu
+4. Si oui, on reprend. Si non, on re-coupe
+
+## 13.12 Pourquoi dist/ separe par instance
+
+Initialement, `dist/` etait un symlink partage entre les instances. Probleme :
+si on compile (`npm run build`) pendant que les instances tournent, elles peuvent
+charger du code a moitie compile.
+
+Solution : `dist/` est une **copie** pour chaque instance. Le script `deploy.sh`
+gere la distribution apres compilation.
+
+## 13.13 Pourquoi le backoff exponentiel
+
+La fonction `calculateBackoff` est extraite dans `backoff.ts` pour etre reutilisee :
+
+```typescript
+function calculateBackoff(consecutiveErrors: number, baseMs: number, maxMs: number): number {
+  return consecutiveErrors > 0
+    ? Math.min(baseMs * Math.pow(2, consecutiveErrors), maxMs)
+    : baseMs;
+}
+```
+
+Utilise par :
+- Gmail channel (polling errors)
+- Google Chat channel (polling errors)
+- Group queue (retries)
+
+---
+
+# 14. Scores de qualite
+
+Evaluation de la qualite du systeme selon 11 categories :
+
+| #  | Categorie                    | Score   | Justification                                                    |
+|----|------------------------------|---------|------------------------------------------------------------------|
+| 1  | Securite                     | 88/100  | Credential proxy, mount isolation, sender allowlist, Gmail       |
+|    |                              |         | draft safety, PIN auth. -12 : pas de chiffrement at rest SQLite, |
+|    |                              |         | pas de WAF sur Cloud Run.                                        |
+| 2  | Observabilite                | 95/100  | Health endpoints, Prometheus metrics, dashboard, watchdog,       |
+|    |                              |         | structured logging. -5 : pas encore Grafana dashboards.          |
+| 3  | Tests                        | 92/100  | 514 tests, E2E Docker, circuit breaker. -8 : pas de tests       |
+|    |                              |         | Python, pas de tests de charge realistes.                        |
+| 4  | Architecture                 | 90/100  | Split propre, constants centralisees, interfaces Channel.        |
+|    |                              |         | -10 : quelques `any` restants, couplage state global.           |
+| 5  | Operations                   | 93/100  | create-agent.sh, deploy.sh, backup GCS, log rotation,           |
+|    |                              |         | watchdog. -7 : pas de rollback automatique, pas de canary.      |
+| 6  | Documentation                | 90/100  | ARCHITECTURE.md, TROUBLESHOOTING.md, TECHNICAL-OVERVIEW.md,     |
+|    |                              |         | CHANGELOG.md. -10 : pas de doc API (endpoints proxy/gateway).   |
+| 7  | Maintenabilite               | 88/100  | Code lisible, <14k lignes, TypeScript strict. -12 : dependance  |
+|    |                              |         | sur un seul mainteneur, pas de CI/CD automatise.                 |
+| 8  | Fiabilite                    | 85/100  | Graceful shutdown, recovery au demarrage, circuit breaker.       |
+|    |                              |         | -15 : pas de HA, single point of failure (Mac Mini).             |
+| 9  | Performance                  | 87/100  | Polling leger, GroupQueue concurrence, cache TTL.                |
+|    |                              |         | -13 : pas de metriques de latence end-to-end.                    |
+| 10 | Scalabilite                  | 70/100  | 4 agents OK, 10+ agents necessiterait du refactoring.            |
+|    |                              |         | -30 : pas de distribution multi-machine, polling lineaire.       |
+| 11 | Conformite                   | 95/100  | Licence proprietaire, copyright headers, redaction des secrets.  |
+|    |                              |         | -5 : pas d'audit RGPD formel sur les donnees stockees.          |
+|    |                              |         |                                                                  |
+|    | **Moyenne**                  | **88/100** |                                                               |
+
+---
+
+# 15. Configuration
+
+## 15.1 Variables d'environnement
+
+Toutes les variables reconnues, validees par Zod au demarrage :
+
+### Requises
+
+| Variable              | Type   | Description                                      |
+|----------------------|--------|--------------------------------------------------|
+| `ANTHROPIC_API_KEY`  | string | Cle API Anthropic (REQUISE)                      |
+
+### Identite
+
+| Variable                   | Type   | Defaut     | Description                     |
+|---------------------------|--------|------------|---------------------------------|
+| `ASSISTANT_NAME`          | string | `Andy`     | Nom de l'agent (pour triggers)  |
+| `ASSISTANT_HAS_OWN_NUMBER`| bool  | `false`    | Agent a son propre numero WA    |
+
+### Modele IA
+
+| Variable        | Type   | Defaut               | Description                     |
+|----------------|--------|----------------------|---------------------------------|
+| `CLAUDE_MODEL` | string | `claude-sonnet-4-6`  | Modele Claude pour les agents   |
+
+### Controle des couts
+
+| Variable              | Type   | Defaut | Description                          |
+|----------------------|--------|--------|--------------------------------------|
+| `DAILY_API_LIMIT_USD`| number | `20`   | Limite de depense quotidienne (USD)  |
+
+### Container
+
+| Variable                     | Type   | Defaut               | Description                     |
+|-----------------------------|--------|----------------------|---------------------------------|
+| `CONTAINER_PREFIX`          | string | `nanoclaw`           | Prefixe des noms de containers  |
+| `CONTAINER_IMAGE`           | string | `nanoclaw-agent:latest` | Image Docker                 |
+| `CONTAINER_TIMEOUT`         | number | `1800000`            | Timeout hard (30min) en ms      |
+| `CONTAINER_MAX_OUTPUT_SIZE` | number | `10485760`           | Taille max output (10MB)        |
+| `IDLE_TIMEOUT`              | number | `1800000`            | Timeout idle (30min) en ms      |
+| `MAX_CONCURRENT_CONTAINERS` | number | `5`                  | Max containers en parallele     |
+
+### Reseau
+
+| Variable                 | Type   | Defaut    | Description                          |
+|-------------------------|--------|-----------|--------------------------------------|
+| `CREDENTIAL_PROXY_PORT` | number | `3001`    | Port du credential proxy             |
+| `CREDENTIAL_PROXY_HOST` | string | auto      | Adresse de bind du proxy             |
+
+### Polling
+
+| Variable                  | Type   | Defaut  | Description                           |
+|--------------------------|--------|---------|---------------------------------------|
+| `POLL_INTERVAL`          | number | `2000`  | Intervalle poll messages (ms)         |
+| `SCHEDULER_POLL_INTERVAL`| number | `60000` | Intervalle poll taches planifiees     |
+| `IPC_POLL_INTERVAL`      | number | `1000`  | Intervalle poll IPC (ms)              |
+
+### Google Chat
+
+| Variable                          | Type   | Defaut     | Description                     |
+|----------------------------------|--------|------------|---------------------------------|
+| `GOOGLE_CHAT_ENABLED`           | bool   | `false`    | Active le canal Google Chat     |
+| `GOOGLE_CHAT_AGENT_NAME`        | string | `nanoclaw` | Nom agent dans Firestore        |
+| `GOOGLE_APPLICATION_CREDENTIALS`| string | -          | Chemin service account JSON     |
+| `GOOGLE_CHAT_BOT_SA`            | string | -          | Service account Chat Bot        |
+
+### Gmail
+
+| Variable                      | Type   | Defaut  | Description                          |
+|------------------------------|--------|---------|--------------------------------------|
+| `GMAIL_WEBHOOK_ENABLED`     | bool   | `false` | Active le webhook Gmail Firestore    |
+| `GMAIL_MCP_DIR`             | string | -       | Chemin credentials Gmail             |
+| `GMAIL_DIRECT_SEND_ALLOWLIST`| string | -      | Emails envoi direct (comma-sep)      |
+| `GMAIL_NOTIFY_EMAIL`        | string | -       | Email de notification brouillons     |
+| `GMAIL_CC_EMAIL`            | string | -       | CC automatique emails sortants       |
+
+### Remote Control
+
+| Variable              | Type   | Defaut | Description                          |
+|----------------------|--------|--------|--------------------------------------|
+| `REMOTE_CONTROL_PIN` | string | -      | PIN auth (min 4 chars, disabled si vide) |
+
+### Voice
+
+| Variable       | Type   | Defaut        | Description                           |
+|---------------|--------|---------------|---------------------------------------|
+| `WHISPER_BIN` | string | `whisper-cli` | Chemin vers le binaire whisper        |
+| `WHISPER_MODEL`| string | -            | Chemin vers le modele whisper         |
+
+### Logging
+
+| Variable    | Type   | Defaut | Description                                   |
+|------------|--------|--------|-----------------------------------------------|
+| `LOG_LEVEL`| enum   | `info` | trace, debug, info, warn, error, fatal        |
+
+### Timezone
+
+| Variable | Type   | Defaut   | Description                                   |
+|---------|--------|----------|-----------------------------------------------|
+| `TZ`    | string | systeme  | Timezone pour les taches planifiees            |
+
+### Validation Zod au demarrage
+
+Au demarrage, `validateEnv()` valide toutes les variables d'environnement via un schema Zod :
+
+- **ANTHROPIC_API_KEY absente** : Erreur fatale, arret du processus
+- **Variable optionnelle invalide** : Warning dans les logs, le systeme continue avec le defaut
+- **Variable inconnue** : Ignoree (pas de rejet)
+
+Le schema coerce automatiquement les types (`z.coerce.number()` pour les entiers passes
+en string depuis `.env`).
+
+### Sequence de demarrage
+
+L'ordre de demarrage dans `main()` est critique :
+
+```
+1. validateEnv()              -- Verifier les variables d'environnement
+2. ensureContainerRunning()   -- Verifier Docker + nettoyer les orphelins
+3. initDatabase()             -- Ouvrir/creer SQLite
+4. loadState()                -- Charger curseurs et sessions depuis SQLite
+5. startCredentialProxy()     -- Demarrer le proxy HTTP (port 3001-3004)
+6. setHealthDeps()            -- Connecter le /health au contexte
+7. initChannels()             -- Initialiser WhatsApp, Gmail, Google Chat
+8. startSchedulerLoop()       -- Demarrer le polling des taches planifiees
+9. startIpcWatcher()          -- Demarrer le watcher IPC
+10. recoverPendingMessages()  -- Verifier les messages non traites
+11. startMessageLoop()        -- Demarrer la boucle de polling principale
+```
+
+Le shutdown graceful est dans l'ordre inverse :
+1. Fermer le proxy HTTP
+2. Attendre la GroupQueue (10s max)
+3. Deconnecter tous les canaux
+4. exit(0)
+
+## 15.2 Ports
+
+| Port | Service                          | Instance          |
+|------|----------------------------------|-------------------|
+| 3001 | Credential proxy + health/metrics| Botti             |
+| 3002 | Credential proxy + health/metrics| Thais             |
+| 3003 | Credential proxy + health/metrics| Sam               |
+| 3004 | Credential proxy + health/metrics| Alan              |
+| 3100 | Dashboard monitoring             | Global            |
+
+## 15.3 Fichiers de configuration de securite
+
+Tous dans `~/.config/nanoclaw/` (hors du projet, jamais montes dans les containers) :
+
+| Fichier                     | Format | Role                                     |
+|----------------------------|--------|------------------------------------------|
+| `mount-allowlist.json`     | JSON   | Chemins autorises pour les mounts extra  |
+| `sender-allowlist.json`    | JSON   | Qui peut trigger les agents              |
+| `gmail-send-allowlist.json`| JSON   | Qui les agents peuvent emailer           |
+| `watchdog-state.json`      | JSON   | Etat du watchdog (dernieres alertes)     |
+
+## 15.4 Collections Firestore
+
+| Collection            | Document / Sous-collection              | Usage                |
+|----------------------|------------------------------------------|----------------------|
+| `nanoclaw-messages`  | `{agent}/google-chat` (sous-coll docs)  | Messages Chat        |
+| `nanoclaw-signals`   | `{instance}/gmail-webhook` (doc)         | Signaux Gmail        |
+| `chat-config`        | `space-mapping` (doc)                    | Mapping space->agent |
+
+---
+
+# 16. Roadmap
+
+## 16.1 Ce qui est fait (v2.0.0)
+
+- [x] Multi-agent (4 instances)
+- [x] Google Chat integration (Chat App + Gateway + Firestore)
+- [x] Gmail webhook (Pub/Sub + Botti Voice + Firestore)
+- [x] Email filtering (newsletters, marketing, noreply)
+- [x] Botti Voice (Gemini Live, agent selector, memoire unifiee)
+- [x] Dashboard monitoring (port 3100)
+- [x] create-agent.sh (creation automatisee)
+- [x] deploy.sh (build + distribution)
+- [x] Health endpoints (/health, /metrics)
+- [x] Prometheus metrics (counters, gauges, histograms)
+- [x] Circuit breaker sur le proxy
+- [x] IPC rate limiting
+- [x] Zod environment validation
+- [x] Rotation des logs
+- [x] Backup GCS quotidien
+- [x] Watchdog alerting WhatsApp
+- [x] Gmail send safety (brouillon + notification)
+- [x] Split index.ts en modules
+- [x] constants.ts centralise
+- [x] dist/ isole par instance
+- [x] 514 tests
+- [x] Documentation technique complete
+- [x] Licence proprietaire Botler 360
+
+## 16.2 Prochaines etapes (v2.1+)
+
+- [ ] **Grafana dashboards** : Visualisation des metriques Prometheus
+- [ ] **Gemini 3.1** : Mise a jour du modele audio quand disponible
+- [ ] **Plus d'agents** : Facilite par create-agent.sh
+- [ ] **Tests Python** : Suite de tests pour Botti Voice et Chat Gateway
+- [ ] **CI/CD** : Pipeline GitHub Actions pour build, test, deploy
+- [ ] **WAF Cloud Run** : Protection supplementaire des endpoints publics
+- [ ] **Chiffrement SQLite** : sqlcipher pour les donnees at rest
+- [ ] **Audit RGPD** : Revue formelle des donnees personnelles stockees
+- [ ] **Multi-machine** : Distribution des agents sur plusieurs machines
+- [ ] **Grafana alerting** : Remplacement du watchdog bash par Grafana alerts
+- [ ] **Google Chat webhook direct** : Eliminer le polling si possible
+- [ ] **Tests de charge** : Simulation de 100+ messages simultanes
+
+---
+
+# 17. Comment creer un nouvel agent
+
+## 17.1 Prerequis
+
+- Le Mac Mini est operationnel avec au moins un agent (Botti)
+- Docker Desktop est lance
+- L'API key Anthropic est dans le `.env` de l'instance principale
+- Les credentials Firebase sont en place (`~/.firebase-mcp/adp-service-account.json`)
+- Un compte Google Workspace existe pour l'agent (email @bestoftours.co.uk)
+
+## 17.2 Procedure
+
+### Etape 1 : Lancer le script
+
+```bash
+cd ~/nanoclaw
+./create-agent.sh <nom> <email> [--port PORT] [--model MODEL]
+```
+
+Exemples :
+```bash
+./create-agent.sh marie marie@bestoftours.co.uk
+./create-agent.sh ahmed ahmed@bestoftours.co.uk --port 3005 --model claude-sonnet-4-6
+```
+
+### Etape 2 : Authentification Gmail
+
+Le script ouvre un navigateur pour l'authentification OAuth2. Se connecter avec le
+compte Google de l'agent. Les scopes demandes sont :
+- `https://mail.google.com/` (Gmail complet)
+- `https://www.googleapis.com/auth/calendar` (Calendrier)
+- `https://www.googleapis.com/auth/drive.readonly` (Drive lecture)
+
+### Etape 3 : Configurer le Chat Gateway
+
+Apres la creation, le script rappelle d'ajouter l'agent au Chat Gateway :
+1. Aller dans le code du Chat Gateway (`chat-gateway/server.py`)
+2. Ajouter le nom au set `VALID_AGENTS`
+3. Redeployer sur Cloud Run
+4. Ajouter le mapping space->agent dans Firestore (`chat-config/space-mapping`)
+
+### Etape 4 : Verifier
+
+```bash
+# Verifier le service
+launchctl list | grep nanoclaw.<nom>
+
+# Health check
+curl http://localhost:<port>/health
+
+# Logs
+tail -f ~/nanoclaw-<nom>/logs/nanoclaw.log | jq .
+```
+
+### Etape 5 : Personnaliser
+
+Editer le fichier `~/nanoclaw-<nom>/groups/gmail_main/CLAUDE.md` pour personnaliser
+le comportement de l'agent (role, regles, connaissances).
+
+## 17.3 En cas de probleme
+
+Voir `docs/TROUBLESHOOTING.md` pour les problemes courants :
+- Token OAuth expire (#4)
+- Port deja utilise (#11)
+- Agent ne recoit pas les emails (#5)
+- Google Chat ne repond pas (#7)
+
+---
+
+# 18. Annexes
+
+## 18.1 Arborescence des fichiers source
+
+```
+src/
+  index.ts                  -- Orchestrateur principal (startup, wiring, shutdown)
+  state.ts                  -- Gestion etat (timestamps, sessions, groupes)
+  message-processor.ts      -- Traitement messages, spawn containers, anti-spam
+  channel-manager.ts        -- Init canaux, callbacks, remote control
+  config.ts                 -- Configuration depuis .env (non-secrets)
+  constants.ts              -- Constantes centralisees par domaine
+  types.ts                  -- Interfaces TypeScript (Channel, Message, Task, etc.)
+  db.ts                     -- Operations SQLite (better-sqlite3)
+  env.ts                    -- Lecture fichier .env
+  env-validation.ts         -- Validation Zod au demarrage
+  logger.ts                 -- Pino structured logging + redaction
+  metrics.ts                -- Registre Prometheus (counters, gauges, histograms)
+  router.ts                 -- Formatage messages + routage sortant
+  credential-proxy.ts       -- Proxy HTTP, circuit breaker, daily spend
+  container-runner.ts       -- Spawn containers, mounts, output parsing
+  container-runtime.ts      -- Detection runtime (Docker/Apple), orphan cleanup
+  mount-security.ts         -- Validation des mounts additionnels
+  group-folder.ts           -- Validation noms de dossiers groupes
+  group-queue.ts            -- File d'attente concurrence containers
+  message-loop.ts           -- Boucle de polling messages
+  task-scheduler.ts         -- Execution taches planifiees (cron/interval/once)
+  ipc.ts                    -- Watcher IPC file-based
+  anti-spam.ts              -- Detection rate limit, cooldown notifications
+  backoff.ts                -- Calcul backoff exponentiel (partage)
+  sender-allowlist.ts       -- Allowlist expediteurs par chat
+  remote-control.ts         -- Remote Control Claude Code via WhatsApp
+  media-download.ts         -- Telechargement medias WhatsApp
+  transcription.ts          -- Transcription vocale (Whisper)
+  timezone.ts               -- Injection timezone
+  whatsapp-auth.ts          -- Authentification WhatsApp standalone
+  channels/
+    index.ts                -- Barrel import (auto-enregistrement)
+    registry.ts             -- Registre de canaux (pattern factory)
+    whatsapp.ts             -- Canal WhatsApp (Baileys)
+    gmail.ts                -- Canal Gmail (OAuth2 + Firestore)
+    google-chat.ts          -- Canal Google Chat (Firestore + Chat API)
+  e2e/
+    container-e2e.test.ts   -- Tests E2E Docker (isolation, env, tools)
+  integration/
+    *.test.ts               -- Tests d'integration
+  *.test.ts                 -- Tests unitaires (meme niveau que les modules)
+```
+
+## 18.2 Schema de base de donnees
+
+```sql
+-- ===================================================
+-- NanoClaw SQLite Schema (store/messages.db)
+-- ===================================================
+
+-- Metadonnees des conversations
+CREATE TABLE chats (
+  jid TEXT PRIMARY KEY,               -- Identifiant unique du chat
+  name TEXT,                           -- Nom affiche
+  last_message_time TEXT,              -- Dernier message (ISO 8601)
+  channel TEXT,                        -- Canal ('whatsapp', 'gmail', 'google-chat')
+  is_group INTEGER DEFAULT 0           -- 1 = groupe, 0 = conversation privee
+);
+
+-- Messages recus et envoyes
+CREATE TABLE messages (
+  id TEXT,                             -- ID unique du message
+  chat_jid TEXT,                       -- Reference au chat
+  sender TEXT,                         -- ID de l'expediteur
+  sender_name TEXT,                    -- Nom affiche de l'expediteur
+  content TEXT,                        -- Contenu du message
+  timestamp TEXT,                      -- Horodatage (ISO 8601)
+  is_from_me INTEGER,                  -- 1 = envoye par l'agent
+  is_bot_message INTEGER DEFAULT 0,    -- 1 = message du bot
+  PRIMARY KEY (id, chat_jid),
+  FOREIGN KEY (chat_jid) REFERENCES chats(jid)
+);
+CREATE INDEX idx_timestamp ON messages(timestamp);
+
+-- Taches planifiees
+CREATE TABLE scheduled_tasks (
+  id TEXT PRIMARY KEY,                 -- UUID
+  group_folder TEXT NOT NULL,          -- Dossier du groupe
+  chat_jid TEXT NOT NULL,              -- Chat cible pour la reponse
+  prompt TEXT NOT NULL,                -- Prompt a executer
+  schedule_type TEXT NOT NULL,         -- 'cron', 'interval', 'once'
+  schedule_value TEXT NOT NULL,        -- Expression cron, interval ms, ISO date
+  next_run TEXT,                       -- Prochaine execution (ISO 8601)
+  last_run TEXT,                       -- Derniere execution
+  last_result TEXT,                    -- Dernier resultat
+  status TEXT DEFAULT 'active',        -- 'active', 'paused', 'completed'
+  created_at TEXT NOT NULL,            -- Date de creation
+  context_mode TEXT DEFAULT 'isolated' -- 'group' = contexte du groupe, 'isolated' = fresh
+);
+CREATE INDEX idx_next_run ON scheduled_tasks(next_run);
+CREATE INDEX idx_status ON scheduled_tasks(status);
+
+-- Historique d'execution des taches
+CREATE TABLE task_run_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id TEXT NOT NULL,               -- Reference a scheduled_tasks
+  run_at TEXT NOT NULL,                -- Horodatage de l'execution
+  duration_ms INTEGER NOT NULL,        -- Duree en ms
+  status TEXT NOT NULL,                -- 'success', 'error'
+  result TEXT,                         -- Resultat (tronque)
+  error TEXT,                          -- Message d'erreur
+  FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
+);
+CREATE INDEX idx_task_run_logs ON task_run_logs(task_id, run_at);
+
+-- Etat du routeur (curseurs de lecture, timestamps)
+CREATE TABLE router_state (
+  key TEXT PRIMARY KEY,                -- Cle (ex: 'last_timestamp')
+  value TEXT NOT NULL                  -- Valeur serialisee
+);
+
+-- Sessions Claude par groupe
+CREATE TABLE sessions (
+  group_folder TEXT PRIMARY KEY,       -- Dossier du groupe
+  session_id TEXT NOT NULL             -- ID de session Claude
+);
+
+-- Groupes enregistres
+CREATE TABLE registered_groups (
+  jid TEXT PRIMARY KEY,                -- JID du chat
+  name TEXT NOT NULL,                  -- Nom affiche
+  folder TEXT NOT NULL UNIQUE,         -- Dossier sur le disque
+  trigger_pattern TEXT NOT NULL,       -- Pattern de declenchement (@NomAgent)
+  added_at TEXT NOT NULL,              -- Date d'ajout
+  container_config TEXT,               -- Config container JSON (mounts, timeout)
+  requires_trigger INTEGER DEFAULT 1,  -- 1 = trigger requis, 0 = auto
+  is_main INTEGER DEFAULT 0            -- 1 = groupe principal
+);
+```
+
+## 18.3 Diagramme de sequence : message WhatsApp
+
+```
+Utilisateur      WhatsApp     Baileys      ChannelMgr    SQLite     MsgLoop    GroupQueue   MsgProcessor  ContainerRunner   Docker      CredProxy    Anthropic
+    |               |            |             |            |          |            |              |              |            |             |            |
+    |--message----->|            |             |            |          |            |              |              |            |             |            |
+    |               |--WS push-->|             |            |          |            |              |              |            |             |            |
+    |               |            |--onMessage->|            |          |            |              |              |            |             |            |
+    |               |            |             |--store---->|          |            |              |              |            |             |            |
+    |               |            |             |            |          |            |              |              |            |             |            |
+    |               |            |             |            |<--poll---|            |              |              |            |             |            |
+    |               |            |             |            |--msgs--->|            |              |              |            |             |            |
+    |               |            |             |            |          |--enqueue-->|              |              |            |             |            |
+    |               |            |             |            |          |            |--process---->|              |              |            |             |            |
+    |               |            |             |            |          |            |              |--spawn------>|              |            |             |            |
+    |               |            |             |            |          |            |              |              |--docker run->|             |            |
+    |               |            |             |            |          |            |              |              |            |--API call-->|             |
+    |               |            |             |            |          |            |              |              |            |             |--inject key->|
+    |               |            |             |            |          |            |              |              |            |             |<--response--|
+    |               |            |             |            |          |            |              |              |            |<--response--|             |
+    |               |            |             |            |          |            |              |              |<--stdout----|             |            |
+    |               |            |             |            |          |            |              |<--output------|              |            |             |            |
+    |               |            |             |<---send----|----------|------------|--------------|              |            |             |            |
+    |               |<--WS send--|             |            |          |            |              |              |            |             |            |
+    |<--message-----|            |             |            |          |            |              |              |            |             |            |
+```
+
+## 18.4 Diagramme de sequence : message Gmail avec webhook
+
+```
+Expediteur    Gmail API    Pub/Sub     BottiVoice   Firestore    NanoClaw    Gmail API    Container    CredProxy
+    |            |            |            |            |            |            |            |            |
+    |--email---->|            |            |            |            |            |            |            |
+    |            |--push----->|            |            |            |            |            |            |
+    |            |            |--webhook-->|            |            |            |            |            |
+    |            |            |            |--signal--->|            |            |            |            |
+    |            |            |            |            |<--poll(5s)-|            |            |            |
+    |            |            |            |            |--signal--->|            |            |            |
+    |            |            |            |            |            |--get msg-->|            |            |
+    |            |            |            |            |            |<--email----|            |            |
+    |            |            |            |            |            |--filter--->|            |            |
+    |            |            |            |            |            |  (auto?)   |            |            |
+    |            |            |            |            |            |--spawn-----|----------->|            |
+    |            |            |            |            |            |            |            |--API------>|
+    |            |            |            |            |            |            |            |<--response-|
+    |            |            |            |            |            |<--output---|------------|            |
+    |            |            |            |            |            |--reply via gws--------->|            |
+```
+
+## 18.5 Diagramme de sequence : message Google Chat
+
+```
+Utilisateur   GoogleChat   ChatGateway   Firestore    NanoClaw    ChatAPI     Container    CredProxy
+    |            |             |             |            |            |            |            |
+    |--message-->|             |             |            |            |            |            |
+    |            |--webhook--->|             |            |            |            |            |
+    |            |             |--verify tok-|            |            |            |            |
+    |            |             |--rate check-|            |            |            |            |
+    |            |             |--route----->|            |            |            |            |
+    |            |             |  (space->   |            |            |            |            |
+    |            |             |   agent)    |            |            |            |            |
+    |            |             |--write----->|            |            |            |            |
+    |            |             |             |<--poll(5s)-|            |            |            |
+    |            |             |             |--msg------>|            |            |            |
+    |            |             |             |            |--spawn---->|----------->|            |
+    |            |             |             |            |            |            |--API------>|
+    |            |             |             |            |            |            |<--resp.----|
+    |            |             |             |            |<--output---|------------|            |
+    |            |             |             |            |--send----->|            |            |
+    |<--reponse--|-------------|-------------|------------|            |            |            |
+```
+
+## 18.6 Glossaire
+
+| Terme                    | Definition                                                      |
+|-------------------------|------------------------------------------------------------------|
+| **Agent**               | Instance NanoClaw avec son propre email, memoire, canaux        |
+| **Canal / Channel**     | Module de communication (WhatsApp, Gmail, Google Chat)          |
+| **Container**           | Environnement Docker isole ou tourne Claude Agent SDK           |
+| **Credential Proxy**    | Serveur HTTP local qui injecte les API keys dans les requetes   |
+| **Circuit Breaker**     | Pattern qui coupe les requetes apres N echecs consecutifs       |
+| **CLAUDE.md**           | Fichier de memoire/instructions de l'agent                      |
+| **Group**               | Conversation enregistree (chat WhatsApp, inbox Gmail, etc.)     |
+| **Group Queue**         | File d'attente qui limite les containers en parallele           |
+| **IPC**                 | Communication inter-processus (host <-> container) via fichiers |
+| **JID**                 | Identifiant unique d'un chat (ex: `gmail:main`, `gchat:spaces/X`) |
+| **Main Group**          | Groupe principal d'un agent (privileges eleves, pas de trigger) |
+| **Message Loop**        | Boucle de polling qui detecte les nouveaux messages             |
+| **Mount**               | Volume Docker monte dans le container                           |
+| **Polling**             | Interrogation periodique d'une source de donnees                |
+| **Sender Allowlist**    | Liste des expediteurs autorises a declencher l'agent            |
+| **Session**             | Session Claude persistante (contexte entre conversations)       |
+| **Skill**               | Modification du code via un script (ex: `/add-telegram`)        |
+| **Trigger**             | Pattern qui active l'agent (ex: `@Botti question`)             |
+| **Watchdog**            | Script de surveillance qui alerte en cas de panne               |
+| **Webhook**             | Notification push d'un service externe (Gmail, Google Chat)     |
+| **gws CLI**             | CLI Google Workspace (Gmail, Calendar, Drive, Sheets, Docs)     |
+| **Botti Voice**         | Application web vocale utilisant Gemini Live                    |
+| **Chat Gateway**        | Service Cloud Run qui recoit les webhooks Google Chat           |
+| **Firestore**           | Base de donnees NoSQL GCP utilisee comme bus de messages        |
+| **Pub/Sub**             | Service de messaging GCP pour les notifications Gmail           |
+| **GCS**                 | Google Cloud Storage (pour les backups)                         |
+| **Plist**               | Fichier de configuration launchd (macOS)                        |
+| **launchd**             | Gestionnaire de processus natif macOS                           |
+| **Pino**                | Bibliotheque de logging structure JSON pour Node.js             |
+| **Prometheus**          | Format standard de metriques (text exposition format)           |
+| **Zod**                 | Bibliotheque de validation de schema TypeScript                 |
+| **Baileys**             | Bibliotheque non-officielle pour l'API WhatsApp Web             |
+
+---
+
+## 18.7 Format de l'allowlist mount
+
+Exemple complet de `~/.config/nanoclaw/mount-allowlist.json` :
+
+```json
+{
+  "allowedRoots": [
+    {
+      "path": "~/projects",
+      "allowReadWrite": true,
+      "description": "Development projects"
+    },
+    {
+      "path": "~/repos",
+      "allowReadWrite": true,
+      "description": "Git repositories"
+    },
+    {
+      "path": "~/Documents/work",
+      "allowReadWrite": false,
+      "description": "Work documents (read-only)"
+    }
+  ],
+  "blockedPatterns": [
+    "password",
+    "secret",
+    "token"
+  ],
+  "nonMainReadOnly": true
+}
+```
+
+## 18.8 Format de l'allowlist sender
+
+Exemple complet de `~/.config/nanoclaw/sender-allowlist.json` :
+
+```json
+{
+  "logDenied": true,
+  "rules": {
+    "group-jid-1@g.us": {
+      "mode": "trigger",
+      "allowed": ["33612345678@s.whatsapp.net", "33698765432@s.whatsapp.net"]
+    },
+    "group-jid-2@g.us": {
+      "mode": "drop",
+      "allowed": ["*"]
+    },
+    "gmail:main": {
+      "mode": "trigger",
+      "allowed": ["*"]
+    }
+  }
+}
+```
+
+**Modes** :
+- `trigger` : Le message est stocke dans SQLite mais ne declenche pas l'agent
+  sauf si l'expediteur est dans la liste `allowed`
+- `drop` : Le message est completement ignore (ni stocke, ni traite)
+
+**Wildcards** :
+- `*` : Tous les expediteurs sont autorises
+- Si un JID n'a pas de regle, le comportement par defaut est `trigger` avec `["*"]`
+
+## 18.9 Format de l'allowlist Gmail send
+
+Exemple complet de `~/.config/nanoclaw/gmail-send-allowlist.json` :
+
+```json
+{
+  "direct_send": [
+    "yacine@bestoftours.co.uk",
+    "eline@bestoftours.co.uk",
+    "ahmed@bestoftours.co.uk",
+    "bakoucheyacine@gmail.com"
+  ],
+  "notify_email": "yacine@bestoftours.co.uk",
+  "cc_email": ""
+}
+```
+
+**Logique d'envoi** :
+1. L'agent veut envoyer un email a `destinataire@example.com`
+2. Si `destinataire@example.com` est dans `direct_send` -> envoi direct
+3. Sinon -> creation d'un brouillon + envoi de notification a `notify_email`
+4. Si `cc_email` est configure -> CC automatique sur tous les emails sortants
+
+## 18.10 Exemple de message Prometheus /metrics
+
+```
+# HELP nanoclaw_messages_received_total Total messages received from channels
+# TYPE nanoclaw_messages_received_total counter
+nanoclaw_messages_received_total{channel="whatsapp"} 142
+nanoclaw_messages_received_total{channel="gmail"} 38
+nanoclaw_messages_received_total{channel="google-chat"} 25
+
+# HELP nanoclaw_messages_processed_total Total messages processed per group
+# TYPE nanoclaw_messages_processed_total counter
+nanoclaw_messages_processed_total{group="whatsapp_main"} 120
+nanoclaw_messages_processed_total{group="gmail_main"} 38
+
+# HELP nanoclaw_containers_spawned_total Total agent containers spawned
+# TYPE nanoclaw_containers_spawned_total counter
+nanoclaw_containers_spawned_total 158
+
+# HELP nanoclaw_container_errors_total Total container agent errors
+# TYPE nanoclaw_container_errors_total counter
+nanoclaw_container_errors_total 3
+
+# HELP nanoclaw_active_containers Number of currently running containers
+# TYPE nanoclaw_active_containers gauge
+nanoclaw_active_containers 2
+
+# HELP nanoclaw_registered_groups Number of registered groups
+# TYPE nanoclaw_registered_groups gauge
+nanoclaw_registered_groups 3
+
+# HELP nanoclaw_uptime_seconds Process uptime in seconds
+# TYPE nanoclaw_uptime_seconds gauge
+nanoclaw_uptime_seconds 86400
+
+# HELP nanoclaw_circuit_breaker_state Circuit breaker state
+# TYPE nanoclaw_circuit_breaker_state gauge
+nanoclaw_circuit_breaker_state{state="closed"} 1
+nanoclaw_circuit_breaker_state{state="open"} 0
+
+# HELP nanoclaw_container_duration_seconds Time spent running agent containers
+# TYPE nanoclaw_container_duration_seconds histogram
+nanoclaw_container_duration_seconds_bucket{le="1"} 5
+nanoclaw_container_duration_seconds_bucket{le="5"} 20
+nanoclaw_container_duration_seconds_bucket{le="10"} 45
+nanoclaw_container_duration_seconds_bucket{le="30"} 100
+nanoclaw_container_duration_seconds_bucket{le="60"} 140
+nanoclaw_container_duration_seconds_bucket{le="120"} 155
+nanoclaw_container_duration_seconds_bucket{le="300"} 157
+nanoclaw_container_duration_seconds_bucket{le="600"} 158
+nanoclaw_container_duration_seconds_bucket{le="1800"} 158
+nanoclaw_container_duration_seconds_bucket{le="+Inf"} 158
+nanoclaw_container_duration_seconds_sum 3240.5
+nanoclaw_container_duration_seconds_count 158
+
+# HELP nanoclaw_api_request_duration_seconds API proxy upstream request latency
+# TYPE nanoclaw_api_request_duration_seconds histogram
+nanoclaw_api_request_duration_seconds_bucket{le="0.1"} 10
+nanoclaw_api_request_duration_seconds_bucket{le="0.25"} 50
+nanoclaw_api_request_duration_seconds_bucket{le="0.5"} 200
+nanoclaw_api_request_duration_seconds_bucket{le="1"} 500
+nanoclaw_api_request_duration_seconds_bucket{le="2.5"} 800
+nanoclaw_api_request_duration_seconds_bucket{le="5"} 950
+nanoclaw_api_request_duration_seconds_bucket{le="10"} 990
+nanoclaw_api_request_duration_seconds_bucket{le="30"} 1000
+nanoclaw_api_request_duration_seconds_bucket{le="+Inf"} 1000
+nanoclaw_api_request_duration_seconds_sum 1500.2
+nanoclaw_api_request_duration_seconds_count 1000
+```
+
+## 18.11 Exemple de reponse /health
+
+```json
+{
+  "status": "ok",
+  "assistant": "Botti",
+  "uptime": 86400,
+  "channels": [
+    { "name": "whatsapp", "connected": true },
+    { "name": "gmail", "connected": true },
+    { "name": "google-chat", "connected": true }
+  ],
+  "groups": {
+    "total": 3,
+    "registered": ["whatsapp_main", "gmail_main", "gchat_main"]
+  },
+  "containers": {
+    "active": 2,
+    "maxConcurrent": 5
+  },
+  "circuitBreaker": {
+    "state": "closed",
+    "failures": 0
+  }
+}
+```
+
+## 18.12 Exemple de launchd plist
+
+Exemple complet du plist pour l'agent Sam (`com.nanoclaw.sam.plist`) :
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -1396,34 +2918,27 @@ Exemple pour Sam (`com.nanoclaw.sam.plist`) :
 <dict>
     <key>Label</key>
     <string>com.nanoclaw.sam</string>
-
     <key>ProgramArguments</key>
     <array>
         <string>/opt/homebrew/bin/node</string>
         <string>/Users/boty/nanoclaw/dist/index.js</string>
     </array>
-
     <key>WorkingDirectory</key>
     <string>/Users/boty/nanoclaw-sam</string>
-
     <key>RunAtLoad</key>
-    <true/>          <!-- Demarre au login -->
-
+    <true/>
     <key>KeepAlive</key>
-    <true/>          <!-- Redemarre si le processus meurt -->
-
+    <true/>
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:...</string>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
         <key>HOME</key>
         <string>/Users/boty</string>
         <key>CREDENTIAL_PROXY_PORT</key>
         <string>3003</string>
         <key>GMAIL_MCP_DIR</key>
         <string>/Users/boty/.gmail-mcp-sam</string>
-        <key>GMAIL_WEBHOOK_ENABLED</key>
-        <string>true</string>
         <key>GOOGLE_CHAT_ENABLED</key>
         <string>true</string>
         <key>GOOGLE_CHAT_AGENT_NAME</key>
@@ -1431,7 +2946,6 @@ Exemple pour Sam (`com.nanoclaw.sam.plist`) :
         <key>GOOGLE_APPLICATION_CREDENTIALS</key>
         <string>/Users/boty/.firebase-mcp/adp-service-account.json</string>
     </dict>
-
     <key>StandardOutPath</key>
     <string>/Users/boty/nanoclaw-sam/logs/nanoclaw.log</string>
     <key>StandardErrorPath</key>
@@ -1440,1160 +2954,83 @@ Exemple pour Sam (`com.nanoclaw.sam.plist`) :
 </plist>
 ```
 
-### Points cles du plist
+**Points importants** :
+- `WorkingDirectory` pointe vers le dossier de l'instance, pas le dossier principal
+- `ProgramArguments` utilise le `dist/index.js` du dossier principal (partage via symlink ou copie)
+- `KeepAlive` = true : launchd relance le processus automatiquement en cas de crash
+- `RunAtLoad` = true : demarre au login de l'utilisateur
+- Les variables d'environnement dans le plist **ecrasent** celles du `.env`
 
-| Propriete | Effet |
-|-----------|-------|
-| `RunAtLoad: true` | Le service demarre automatiquement au login de l'utilisateur |
-| `KeepAlive: true` | launchd redemarre automatiquement le processus s'il crashe |
-| `ProgramArguments` | Pointe vers le binaire Node.js et le `dist/index.js` du nanoclaw **principal** |
-| `WorkingDirectory` | Pointe vers le repertoire de l'**instance** (nanoclaw-sam, etc.) |
-| `EnvironmentVariables` | Variables specifiques a l'instance (port, nom d'agent, chemins) |
+## 18.13 Chat Gateway -- API endpoints
 
-**Important** : le plist de Sam (et des autres) execute le **meme** `dist/index.js` que Botti, mais dans un **working directory different**. C'est le working directory qui determine :
-- Quel `.env` est lu
-- Quelle base SQLite est utilisee
-- Quels groupes/memoire sont charges
+Le Chat Gateway (Cloud Run) expose les endpoints suivants :
 
-### Commandes de gestion
+| Methode | Endpoint           | Auth                      | Description                       |
+|---------|-------------------|---------------------------|-----------------------------------|
+| POST    | `/`               | CHAT_VERIFICATION_TOKEN   | Webhook Google Chat               |
+| POST    | `/admin/mapping`  | ADMIN_API_KEY             | Modifier le mapping space->agent  |
+| GET     | `/admin/mapping`  | ADMIN_API_KEY             | Lire le mapping space->agent      |
+| GET     | `/health`         | None                      | Health check                      |
 
-```bash
-# Demarrer un service
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.sam.plist
+### Webhook Google Chat (POST /)
 
-# Arreter un service
-launchctl bootout gui/$(id -u)/com.nanoclaw.sam
+Le gateway recoit les evenements suivants de Google Chat :
+- `ADDED_TO_SPACE` : Le bot est ajoute a un space
+- `REMOVED_FROM_SPACE` : Le bot est retire d'un space
+- `MESSAGE` : Un message est envoye dans un space ou le bot est present
+- `CARD_CLICKED` : Un bouton de carte est clique (non utilise actuellement)
 
-# Redemarrer un service (le plus utilise)
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw.sam
+Pour les messages `MESSAGE`, le gateway :
+1. Verifie le token de verification
+2. Extrait le texte, l'expediteur, le space
+3. Determine l'agent cible via le mapping Firestore
+4. Ecrit le message dans Firestore
+5. Retourne une reponse vide (200) a Google Chat
 
-# Voir l'etat
-launchctl list | grep nanoclaw
+## 18.14 Botti Voice -- Architecture Python
 
-# Voir les logs
-tail -f /Users/boty/nanoclaw-sam/logs/nanoclaw.log
+```
+botti-voice/
+  web/
+    __init__.py
+    config.py           -- Configuration (Gemini API, memoire NanoClaw)
+    gemini_bridge.py    -- Pont WebSocket <-> Gemini Live API
+    workspace.py        -- Client Google Workspace (Gmail, Calendar)
+    routes.py           -- Routes FastAPI (WebSocket, health)
+    static/             -- Frontend HTML/CSS/JS
+  Dockerfile
+  requirements.txt
 ```
 
-## 8.3 Docker Desktop
+### Flux audio
 
-Docker Desktop pour Mac fournit :
+1. Le navigateur capture l'audio du microphone via WebAudio API
+2. L'audio est encode en PCM 16-bit et envoye via WebSocket
+3. Le serveur `GeminiBridge` transmet l'audio a Gemini Live API
+4. Gemini genere une reponse audio
+5. L'audio de reponse est streame au navigateur via WebSocket
+6. Le navigateur decode et joue l'audio via WebAudio API
 
-- **Apple Hypervisor** : isolation au niveau hyperviseur (pas juste des namespaces)
-- **Docker Engine** : gestion des images et containers
-- **host.docker.internal** : resolution DNS vers le host depuis les containers
-- **Buildkit** : builder cache pour les images
+### Selection de l'agent
 
-### Points d'attention
+A la connexion, le client peut specifier quel agent utiliser :
+- `botti` (defaut), `sam`, `thais`
+- Le prompt systeme est charge depuis le CLAUDE.md de l'agent selectionne
+- Cela permet a Yacine de "parler" avec n'importe quel agent via la voix
 
-- **Cache buildkit** : `--no-cache` seul ne suffit pas pour invalider les COPY steps. Il faut purger le builder volume.
-- **Docker Desktop doit tourner** : si Docker Desktop n'est pas lance, les agents ne peuvent pas spawner de containers.
-- **Performance** : sur Apple Silicon, les containers Linux tournent via la virtualisation ARM native (pas d'emulation x86).
+## 18.15 Historique des versions
 
-## 8.4 Cloud Run (Botti Voice, Chat Gateway)
-
-### Botti Voice
-
-| Propriete | Valeur |
-|-----------|--------|
-| Service | botti-voice |
-| Region | europe-west1 |
-| Runtime | Python + FastAPI |
-| Port | 8080 |
-| URL | Generee par Cloud Run |
-| Concurrence | 1 (single user) |
-| Timeout | 3600s (sessions audio longues) |
-
-### Chat Gateway
-
-| Propriete | Valeur |
-|-----------|--------|
-| Service | chat-gateway |
-| Region | europe-west1 |
-| Runtime | Python + FastAPI |
-| Port | 8080 |
-| URL | Generee par Cloud Run |
-| Concurrence | 80 |
-| Timeout | 60s |
-
-### Agent Hub (optionnel)
-
-| Propriete | Valeur |
-|-----------|--------|
-| Service | agent-hub |
-| Region | europe-west1 |
-| URL | `https://agent-hub-215323664878.europe-west1.run.app` |
-| Role | Orchestrateur d'actions sortantes (Voice -> Gmail/Calendar) |
-
-## 8.5 Services GCP utilises
-
-| Service | Usage |
-|---------|-------|
-| **Cloud Run** | Hebergement Botti Voice + Chat Gateway |
-| **Firestore** | Signaux webhook Gmail, queue Google Chat, mapping spaces |
-| **Pub/Sub** | Notifications push Gmail (topic -> Botti Voice) |
-| **Gmail API** | Lecture/envoi d'emails |
-| **Google Chat API** | Envoi de reponses dans les espaces Chat |
-| **Calendar API** | Lecture/creation d'evenements (via gws CLI + Voice) |
-| **Drive API** | Recherche de fichiers (via gws CLI + Voice) |
-| **OAuth 2.0** | Authentification Gmail, Calendar, Drive |
-| **Service Accounts** | Firestore, Chat Bot |
-
-### Comptes de service
-
-| Compte | Fichier | Usage |
-|--------|---------|-------|
-| ADP Service Account | `~/.firebase-mcp/adp-service-account.json` | Firestore (lecture signaux, queue chat) |
-| Chat Bot SA | `~/.firebase-mcp/chat-bot-sa.json` | API Google Chat (envoi messages via le bot) |
-
-## 8.6 Domaines et DNS
-
-| URL | Service | Usage |
-|-----|---------|-------|
-| Botti Voice Cloud Run URL | Botti Voice | Interface vocale + webhooks Gmail/Chat/Calendar |
-| Chat Gateway Cloud Run URL | Chat Gateway | Webhook principal Google Chat |
-| `localhost:3001` | Credential Proxy Botti | Proxy API (Docker -> host) |
-| `localhost:3002` | Credential Proxy Thais | |
-| `localhost:3003` | Credential Proxy Sam | |
-| `localhost:3004` | Credential Proxy Alan | |
-| `localhost:3100` | Dashboard | Monitoring local |
+| Version  | Date       | Changements majeurs                                    |
+|---------|------------|--------------------------------------------------------|
+| 1.0.0   | Oct 2025   | Version initiale, WhatsApp + containers                |
+| 1.1.0   | Nov 2025   | Skills engine, multi-channel, Qodo integration         |
+| 1.2.x   | Dec 2025-  | Reactions, vision, PDF, OAuth, remote control,         |
+|         | Mars 2026  | credential proxy, media download, Gmail webhooks       |
+| 2.0.0   | 4 Avr 2026 | Multi-agent (4), Google Chat, dashboard, tests 514,    |
+|         |            | create-agent.sh, deploy.sh, circuit breaker,           |
+|         |            | Prometheus metrics, watchdog, backup GCS, index split  |
 
 ---
 
-# 9. Deploiement et operations
-
-## 9.1 deploy.sh
-
-Le script `deploy.sh` est le mecanisme de deploiement central :
-
-```bash
-#!/bin/bash
-# Deploy NanoClaw — rebuild and distribute dist/ to all instances.
-# Usage: ./deploy.sh [--restart]
-set -e
-cd "$(dirname "$0")"
-
-# 1. Build TypeScript
-npm run build
-
-# 2. Copier dist/ vers toutes les instances
-INSTANCES=(nanoclaw-sam nanoclaw-thais nanoclaw-alan)
-for inst in "${INSTANCES[@]}"; do
-  dir="/Users/boty/$inst"
-  if [ -d "$dir" ]; then
-    rm -rf "$dir/dist"
-    cp -R dist "$dir/dist"
-  fi
-done
-
-# 3. Optionnellement redemarrer tous les services
-if [ "$1" = "--restart" ]; then
-  launchctl kickstart -k "gui/$(id -u)/com.nanoclaw"
-  for inst in "${INSTANCES[@]}"; do
-    svc="com.nanoclaw.${inst#nanoclaw-}"
-    launchctl kickstart -k "gui/$(id -u)/$svc"
-  done
-fi
-```
-
-### Workflow de deploiement
-
-```
-1. Modifier le code dans /Users/boty/nanoclaw/src/
-2. cd /Users/boty/nanoclaw
-3. ./deploy.sh --restart
-   -> npm run build (compile TypeScript)
-   -> Copie dist/ vers nanoclaw-sam, nanoclaw-thais, nanoclaw-alan
-   -> Redemarrage de tous les services launchd
-4. Verifier les logs : tail -f logs/nanoclaw.log
-```
-
-### Pourquoi copier dist/ et pas symlinker
-
-Les instances secondaires utilisent des symlinks pour `container/`, `node_modules/`, `package.json` et `src/` mais une **copie reelle** de `dist/`. Raison : si on symlinke `dist/` et qu'on rebuild pendant que les services tournent, les fichiers JS changent sous les pieds des processus en cours, ce qui peut causer des crashes inattendus.
-
-## 9.2 create-agent.sh
-
-Script automatise pour creer un nouvel agent. Usage :
-
-```bash
-./create-agent.sh <nom> <email> [--port PORT] [--model MODEL]
-
-# Exemples
-./create-agent.sh alan ala@bestoftours.co.uk --port 3004
-./create-agent.sh marie marie@bestoftours.co.uk  # port auto-detecte
-```
-
-### Les 15 etapes du script
-
-| Etape | Action |
-|-------|--------|
-| 1 | Valide les inputs (nom lowercase alpha, email avec @) |
-| 2 | Auto-detecte un port libre (scan des plists existants, range 3001-3010) |
-| 3 | Lit la cle API Anthropic depuis le nanoclaw principal |
-| 4 | Cree la structure de repertoires (`groups/gmail_main/`, `data/`, `logs/`, `store/`) |
-| 5 | Cree les symlinks (`container/`, `node_modules/`, `package.json`, `src/`) |
-| 6 | Copie `dist/` (copie reelle, pas symlink) |
-| 7 | Cree le `.env` avec les variables specifiques |
-| 8 | Configure Gmail OAuth (copie les keys, lance le flux OAuth dans le navigateur) |
-| 9 | Cree le plist launchd |
-| 10 | Cree le CLAUDE.md du groupe `gmail_main` (template avec placeholders) |
-| 11 | Initialise la base SQLite avec le schema et enregistre le groupe principal |
-| 12 | Met a jour `deploy.sh` pour inclure le nouvel agent |
-| 13 | Rappel : ajouter l'agent dans `VALID_AGENTS` du Chat Gateway |
-| 14 | Charge et demarre le service launchd |
-| 15 | Verifie que le service tourne |
-
-### Le flux OAuth Gmail
-
-Le script inclut un mini-serveur HTTP pour capturer le callback OAuth :
-
-1. Copie les clefs OAuth depuis un agent existant
-2. Ouvre le navigateur avec l'URL d'autorisation Google
-3. L'utilisateur se connecte avec le compte Gmail de l'agent (ex: sam@bestoftours.co.uk)
-4. Google redirige vers `localhost:8749` avec le code d'autorisation
-5. Le script capture le code et l'echange contre des tokens refresh/access
-6. Les tokens sont sauvegardes dans `~/.gmail-mcp-{agent}/credentials.json`
-
-## 9.3 Dashboard
-
-Le dashboard est un serveur Node.js minimal sur le port 3100 :
-
-### Fonctionnalites
-
-- **Decouverte automatique** : scanne `~/nanoclaw*` pour trouver toutes les instances
-- **Etat des processus** : verifie via `launchctl list` si chaque service tourne
-- **Containers actifs** : compte les containers Docker par prefixe
-- **Analyse des logs** : parse les 2000 dernières lignes de logs JSON pour :
-  - Detecter les channels connectes (WhatsApp, Gmail, etc.)
-  - Trouver la derniere activite agent
-  - Compter les erreurs dans la derniere heure
-- **API JSON** : `GET /api/status` retourne toutes les donnees en JSON
-
-### Endpoint API
-
-```json
-GET http://localhost:3100/api/status
-
-{
-  "summary": {
-    "total": 4,
-    "running": 4,
-    "totalContainers": 2,
-    "totalErrors": 0,
-    "timestamp": "2026-03-31T10:00:00.000Z"
-  },
-  "agents": [
-    {
-      "name": "nanoclaw",
-      "assistantName": "Botti",
-      "status": "running",
-      "pid": 12345,
-      "uptime": "2026-03-30T08:00:00.000Z",
-      "channels": ["gmail", "whatsapp"],
-      "lastActivity": "2026-03-31T09:55:00.000Z",
-      "activeContainers": 1,
-      "errors": 0,
-      "port": "3001",
-      "model": "claude-opus-4-6",
-      "containerPrefix": "nanoclaw"
-    },
-    ...
-  ]
-}
-```
-
-## 9.4 Logs
-
-### Format
-
-NanoClaw utilise **pino** pour le logging. Les logs sont en format JSON :
-
-```json
-{
-  "level": 30,
-  "time": 1711872000000,
-  "pid": 12345,
-  "msg": "Processing messages",
-  "group": "whatsapp_main",
-  "messageCount": 3
-}
-```
-
-### Niveaux de log
-
-| Niveau | Code | Usage |
-|--------|------|-------|
-| TRACE | 10 | Debug detaille |
-| DEBUG | 20 | Messages de debug |
-| INFO | 30 | Fonctionnement normal |
-| WARN | 40 | Situations anormales mais gerees |
-| ERROR | 50 | Erreurs |
-| FATAL | 60 | Erreurs critiques (arret du processus) |
-
-### Fichiers de log
-
-| Fichier | Contenu |
-|---------|---------|
-| `logs/nanoclaw.log` | Logs stdout (pino JSON) |
-| `logs/nanoclaw.error.log` | Logs stderr (erreurs systeme, stack traces) |
-
-### Lire les logs
-
-```bash
-# Suivre les logs en temps reel
-tail -f /Users/boty/nanoclaw/logs/nanoclaw.log
-
-# Formatter les logs JSON (avec pino-pretty)
-tail -f logs/nanoclaw.log | npx pino-pretty
-
-# Chercher les erreurs
-grep '"level":50' logs/nanoclaw.log | npx pino-pretty
-
-# Logs d'un agent specifique
-tail -f /Users/boty/nanoclaw-sam/logs/nanoclaw.log
-```
-
-## 9.5 Troubleshooting courant
-
-### Docker Desktop n'est pas lance
-
-**Symptome** : les agents ne repondent pas, erreurs `docker: command not found` ou `Cannot connect to the Docker daemon`
-
-**Solution** :
-```bash
-# Verifier que Docker tourne
-docker info
-
-# Si non, lancer Docker Desktop
-open -a "Docker Desktop"
-```
-
-### Token Gmail expire
-
-**Symptome** : erreurs `Error: invalid_grant` dans les logs Gmail
-
-**Solution** :
-```bash
-# Verifier les logs
-grep "invalid_grant" /Users/boty/nanoclaw-sam/logs/nanoclaw.log
-
-# Re-lancer le flux OAuth
-# (utiliser le meme flux que create-agent.sh, etape 8)
-```
-
-### Prompt too long / Context overflow
-
-**Symptome** : erreur Claude `prompt is too long` ou l'agent ne repond pas
-
-**Cause** : le CLAUDE.md est devenu trop volumineux, ou trop de messages en attente
-
-**Solution** :
-- Nettoyer le CLAUDE.md (archiver les anciennes sections)
-- Purger la session : supprimer le `session_id` dans SQLite
-- Reduire le nombre de messages en attente
-
-### Container crash / timeout
-
-**Symptome** : `Container agent error` dans les logs, messages non traites
-
-**Causes possibles** :
-- Timeout (30 min par defaut)
-- Out of memory Docker
-- Image Docker corrompue
-
-**Solution** :
-```bash
-# Voir les containers en cours
-docker ps --filter "name=nanoclaw"
-
-# Tuer un container bloque
-docker stop <container_name>
-
-# Nettoyer les orphelins
-docker rm $(docker ps -a --filter "name=nanoclaw" -q)
-
-# Rebuild l'image
-./container/build.sh
-```
-
-### WhatsApp deconnecte
-
-**Symptome** : plus de messages WhatsApp, `connection closed` dans les logs
-
-**Solution** :
-```bash
-# Verifier l'etat
-grep -i "disconnect\|connection" /Users/boty/nanoclaw/logs/nanoclaw.log | tail -20
-
-# Redemarrer Botti
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw
-
-# Si echec, scanner un nouveau QR code (rare)
-# Supprimer store/auth/ et redemarrer
-```
-
-### Agent ne repond pas dans un groupe
-
-**Checklist** :
-1. Le groupe est-il enregistre ? (`SELECT * FROM registered_groups`)
-2. Le trigger (@Agent) est-il present dans le message ?
-3. Le sender est-il dans l'allowlist ?
-4. Le processus tourne-t-il ? (`launchctl list | grep nanoclaw`)
-5. Docker tourne-t-il ? (`docker info`)
-6. Y a-t-il des erreurs dans les logs ?
-
----
-
-# 10. Stack technique detaillee
-
-## 10.1 Core (NanoClaw)
-
-| Technologie | Version | Usage |
-|------------|---------|-------|
-| **Node.js** | 22.x | Runtime |
-| **TypeScript** | 5.x | Langage |
-| **better-sqlite3** | Latest | Base de donnees SQLite |
-| **pino** | Latest | Logging JSON |
-| **@whiskeysockets/baileys** | Latest | WhatsApp Web protocol |
-| **googleapis** | Latest | API Gmail |
-| **google-auth-library** | Latest | OAuth 2.0 |
-| **@google-cloud/firestore** | Latest | Firestore SDK |
-
-## 10.2 Botti Voice
-
-| Technologie | Version | Usage |
-|------------|---------|-------|
-| **Python** | 3.11+ | Runtime |
-| **FastAPI** | Latest | Framework web |
-| **google-genai** | Latest | SDK Gemini |
-| **Gemini 2.5 Flash** | native-audio-latest | Modele audio natif |
-| **Starlette** | Latest | Middleware sessions |
-
-## 10.3 Chat Gateway
-
-| Technologie | Version | Usage |
-|------------|---------|-------|
-| **Python** | 3.11+ | Runtime |
-| **FastAPI** | Latest | Framework web |
-| **google-cloud-firestore** | Latest | SDK Firestore |
-
-## 10.4 Agents (dans les containers)
-
-| Technologie | Version | Usage |
-|------------|---------|-------|
-| **Claude Opus 4.6** | Latest | Modele IA principal |
-| **Claude Agent SDK** | Latest | SDK d'agent (Claude Code) |
-| **agent-browser** | Latest | Navigation web / Chromium |
-| **@googleworkspace/cli** | Latest | Gmail, Calendar, Drive, Sheets, Docs |
-| **Chromium** | Latest | Navigateur headless |
-
-## 10.5 Infrastructure
-
-| Technologie | Usage |
-|------------|-------|
-| **Docker Desktop** | Containers / isolation |
-| **launchd** | Gestion des services macOS |
-| **Google Cloud Run** | Hebergement Cloud |
-| **Firestore** | Base NoSQL temps reel |
-| **Pub/Sub** | Notifications push |
-| **SQLite** | Base relationnelle locale |
-
-## 10.6 Diagramme de la stack
-
-```
-+------------------------------------------------------------------+
-|                        MODELES IA                                |
-|                                                                  |
-|  Claude Opus 4.6          Gemini 2.5 Flash                      |
-|  (Agents texte)           (Voice native audio)                   |
-+------------------------------------------------------------------+
-|                        RUNTIME                                    |
-|                                                                  |
-|  Claude Agent SDK         google-genai SDK                       |
-|  (dans Docker)            (Botti Voice)                          |
-+------------------------------------------------------------------+
-|                        APPLICATION                                |
-|                                                                  |
-|  Node.js/TS   Python/FastAPI   Python/FastAPI   Node.js          |
-|  (NanoClaw)   (Botti Voice)    (Chat Gateway)   (Dashboard)     |
-+------------------------------------------------------------------+
-|                        CHANNELS                                   |
-|                                                                  |
-|  Baileys     googleapis    @google-cloud/    WebSocket           |
-|  (WhatsApp)  (Gmail API)   firestore         (Voice)            |
-|                            (Google Chat)                         |
-+------------------------------------------------------------------+
-|                        STOCKAGE                                   |
-|                                                                  |
-|  SQLite          Firestore          Filesystem                   |
-|  (messages,      (signaux,          (CLAUDE.md,                  |
-|   sessions,       chat-queue,        sessions,                   |
-|   taches)         config)            logs)                       |
-+------------------------------------------------------------------+
-|                        INFRA                                      |
-|                                                                  |
-|  Docker Desktop   launchd    Cloud Run    GCP APIs               |
-|  (containers)     (services)  (Voice,     (Gmail, Chat,          |
-|                               Gateway)     Calendar, Drive)      |
-+------------------------------------------------------------------+
-```
-
----
-
-# 11. Decisions architecturales et trade-offs
-
-## 11.1 Pourquoi Node.js (pas Python) pour le core
-
-| Argument | Detail |
-|----------|--------|
-| **Performance polling** | Node.js est nativement asynchrone, ideal pour du polling concurrent (WhatsApp + Gmail + Firestore + DB) |
-| **TypeScript** | Typage statique, autocompletion, detection d'erreurs a la compilation |
-| **Ecosystem npm** | Baileys (WhatsApp), better-sqlite3, googleapis -- tout existe en npm |
-| **Claude Agent SDK** | Le SDK officiel est en Node.js (`@anthropic-ai/claude-code`) |
-| **Un seul processus** | Event loop Node.js gere naturellement la concurrence sans threads |
-
-Python aurait ete viable mais Node.js etait le choix naturel vu que le Claude Agent SDK est en Node.js.
-
-## 11.2 Pourquoi Docker (pas de sandbox natif)
-
-| Argument | Detail |
-|----------|--------|
-| **Isolation filesystem** | L'agent ne voit que les mounts explicites |
-| **Reproductibilite** | Meme image pour tous les agents, meme environnement |
-| **Cross-platform** | Fonctionne sur macOS et Linux |
-| **Securite** | Hyperviseur Apple (pas juste des namespaces) |
-| **Tooling** | Chromium, git, curl pre-installes dans l'image |
-
-Alternative : Apple Container (plus leger sur macOS, mais pas cross-platform et plus complexe a configurer).
-
-## 11.3 Pourquoi polling + webhook (pas webhook seul)
-
-**Gmail** :
-- Le webhook Pub/Sub notifie qu'il y a du nouveau, mais ne donne pas le contenu
-- Il faut quand meme appeler l'API Gmail pour lire les emails
-- Le polling est le **fallback** si le webhook est down
-- Avec webhook actif : poll toutes les 5 min (fallback), signaux Firestore toutes les 5s
-- Sans webhook : poll direct toutes les 60s
-
-**Avantage** : resilience. Si le webhook tombe (Cloud Run restart, Pub/Sub issue), le polling reprend automatiquement.
-
-## 11.4 Pourquoi Firestore (pas Pub/Sub pull)
-
-| Critere | Firestore | Pub/Sub Pull |
-|---------|-----------|--------------|
-| Lib supplementaire cote NanoClaw | Non (deja utilisee) | Oui (`@google-cloud/pubsub`) |
-| Complexite | Query simple (`where processed == false`) | Subscription, acknowledge, nack |
-| Persistance | Les messages restent jusqu'au traitement | Expire apres retention period |
-| Debugging | Visible dans la console Firebase | Moins visible |
-| Performance | Suffisante (5s polling) | Plus rapide (push) |
-
-Firestore a ete choisi par simplicite : pas de nouvelle dependance, queries intuitives, donnees visibles dans la console.
-
-## 11.5 Pourquoi un seul Chat App (pas 4)
-
-Creer une Google Chat App dans GCP est un processus lourd :
-
-1. Creer un projet GCP ou utiliser un existant
-2. Configurer l'OAuth consent screen
-3. Enregistrer l'app dans la console Chat
-4. Publier l'app (ou la garder en mode test)
-5. Les utilisateurs doivent ajouter l'app manuellement
-
-Multiplier ca par 4 agents serait penible. La solution : **un seul Chat App** ("Botti") avec routing par `@mention` dans le Chat Gateway.
-
-**Limitation** : dans Google Chat, il n'y a qu'un seul "bot" qui repond. Les utilisateurs doivent utiliser `@Sam` ou `@Thais` pour router vers un autre agent. L'experience est un peu moins naturelle qu'avec 4 bots distincts.
-
-## 11.6 Pourquoi Gemini pour Voice (pas Claude)
-
-Claude n'a tout simplement **pas d'API audio native** en mars 2026. Gemini 2.5 Flash offre :
-
-- Audio natif (pas de pipeline STT -> LLM -> TTS)
-- Streaming bidirectionnel (voix en temps reel)
-- Barge-in (interruption quand l'utilisateur parle)
-- Latence minimale (~200ms)
-
-C'est un choix pragmatique : Claude pour le texte (meilleur raisonnement, meilleur tool use), Gemini pour la voix (seul a offrir l'audio natif).
-
-## 11.7 Pourquoi Claude pour les agents (pas Gemini)
-
-| Critere | Claude Opus 4.6 | Gemini 2.5 |
-|---------|------------------|------------|
-| Qualite raisonnement | Excellente | Tres bonne |
-| Tool use / code | Excellent (Claude Code SDK) | Bon |
-| Comprehension instructions longues | Excellente | Bonne |
-| Fenetre contexte | 200k tokens | 1M tokens |
-| SDK agent | Claude Code (mature) | Pas d'equivalent |
-| Container execution | Natif (Claude Code) | Necessiterait du custom |
-
-Le Claude Agent SDK (Claude Code) est **l'element cle**. C'est un environnement d'execution d'agent complet avec session management, tool use, memory, et swarms. Gemini n'a pas d'equivalent aussi mature.
-
-## 11.8 Pourquoi Mac Mini (pas Cloud)
-
-Voir la section 1.4 pour le detail complet. Resume :
-
-1. **WhatsApp** : necessite IP stable (risque de ban avec IP cloud dynamique)
-2. **Cout** : 0 EUR/mois vs 50-200 EUR/mois en cloud
-3. **Secrets** : restent sur la machine, jamais dans le cloud
-4. **Simplicite** : launchd est plus simple que Kubernetes
-
-**Trade-off accepte** : pas de haute disponibilite, dependant de la connexion internet du bureau.
-
----
-
-# 12. Roadmap et prochaines etapes
-
-## 12.1 Court terme (Q2 2026)
-
-### Tests manquants
-
-Le codebase a quelques tests mais la couverture est incomplete :
-
-- `src/index.ts` devrait etre splitte en modules plus testables
-- Les channels ont besoin de tests d'integration
-- Le container-runner necessite des tests de bout en bout
-- Objectif : > 70% de couverture
-
-### Filtrage email avance (ML-based)
-
-Le filtrage actuel est base sur des regles (prefixes, domaines, headers). Un filtrage ML permettrait de :
-
-- Classifier les emails par importance (urgent, normal, low, spam)
-- Apprendre des actions de l'utilisateur (emails ignores vs repondus)
-- Reduire les faux positifs (emails personnels de domaines marketing)
-
-### Rate limiting credential proxy
-
-Ajouter du rate limiting au credential proxy :
-
-- Limiter le nombre de requetes par seconde/minute
-- Limiter le nombre de tokens par requete
-- Alerter quand un pattern anormal est detecte
-
-## 12.2 Moyen terme (Q3-Q4 2026)
-
-### Migration Gemini pour Voice
-
-Quand Gemini 3.x sortira avec des capacites audio ameliorees, migrer Botti Voice. L'architecture est deja preparee (le modele est configurable via `GEMINI_MODEL`).
-
-### Scaling a 10+ agents
-
-Actuellement 4 agents. Pour scaler :
-
-- Optimiser la memoire (un processus Node.js par agent = ~100MB chacun)
-- Envisager un mode multi-agent par processus
-- Externaliser SQLite vers PostgreSQL si les volumes deviennent importants
-- Utiliser un orchestrateur de containers plus sophistique
-
-### Dashboard accessible depuis l'exterieur
-
-Le dashboard actuel est local (port 3100, bind 0.0.0.0 mais pas expose). Options :
-
-- Tunnel ngrok/cloudflared
-- Deployer une version sur Cloud Run avec auth
-- Integrer dans un dashboard existant (Grafana, etc.)
-
-## 12.3 Long terme
-
-### Monitoring/alerting
-
-- Integration PagerDuty ou Slack pour les alertes
-- Metriques Prometheus/Grafana
-- Alertes sur : agent down, erreurs repetees, spend limit proche
-
-### Integration MCP elargie
-
-Ajouter des MCP servers supplementaires aux containers :
-
-- Jira/Linear (gestion de projet)
-- Notion (documentation)
-- BigQuery (analytics)
-- GitHub (code review automatique)
-
-### Agent autonome avance
-
-- Agents qui prennent des initiatives (proactivite basee sur les patterns)
-- Agents qui collaborent entre eux (agent swarms cross-instance)
-- Memoire a long terme avec recherche semantique
-
----
-
-# 13. Comment creer un nouvel agent
-
-## 13.1 Prerequis
-
-1. Le nanoclaw principal (`/Users/boty/nanoclaw`) est installe et fonctionne
-2. Un compte Gmail Workspace pour l'agent (ex: `marie@bestoftours.co.uk`)
-3. Les credentials OAuth GCP (copie automatique depuis un agent existant)
-4. Docker Desktop est lance
-
-## 13.2 Procedure pas-a-pas
-
-### Etape 1 : Lancer le script
-
-```bash
-cd /Users/boty/nanoclaw
-./create-agent.sh marie marie@bestoftours.co.uk
-```
-
-Le script va :
-- Valider le nom (lowercase alpha only)
-- Auto-detecter un port libre (3005, 3006, etc.)
-- Creer tout automatiquement
-
-### Etape 2 : Authentification Gmail
-
-Le navigateur s'ouvre. Se connecter avec le compte `marie@bestoftours.co.uk` et autoriser les scopes :
-- Gmail (lecture/envoi)
-- Calendar (lecture/ecriture)
-- Drive (lecture)
-
-### Etape 3 : Verifier le demarrage
-
-```bash
-# Verifier que le service tourne
-launchctl list | grep nanoclaw.marie
-
-# Voir les logs
-tail -f /Users/boty/nanoclaw-marie/logs/nanoclaw.log
-```
-
-### Etape 4 : Configurer le Chat Gateway
-
-Action manuelle requise : ajouter `"marie"` dans `VALID_AGENTS` du Chat Gateway (Cloud Run).
-
-### Etape 5 : Personnaliser le CLAUDE.md
-
-Editer `/Users/boty/nanoclaw-marie/groups/gmail_main/CLAUDE.md` pour :
-- Definir l'identite et la personnalite de l'agent
-- Ajouter le contexte metier
-- Configurer les regles de communication
-
-### Etape 6 : Configurer les webhooks
-
-Si on veut des webhooks Gmail rapides (vs polling 60s) :
-1. Ajouter le compte dans `GMAIL_WEBHOOK_ACCOUNTS` de Botti Voice
-2. Redemarrer Botti Voice sur Cloud Run
-
-### Etape 7 : Tester
-
-Envoyer un email a `marie@bestoftours.co.uk` et verifier que l'agent repond.
-
-## 13.3 Structure finale
-
-Apres creation, la structure est :
-
-```
-/Users/boty/nanoclaw-marie/
-  .env                          # Config de Marie
-  dist/                         # Copie du code compile
-  container -> ../nanoclaw/container
-  node_modules -> ../nanoclaw/node_modules
-  package.json -> ../nanoclaw/package.json
-  src -> ../nanoclaw/src
-  groups/
-    gmail_main/
-      CLAUDE.md                 # Memoire/identite de Marie
-  store/
-    messages.db                 # Base SQLite
-  data/
-    sessions/
-      gmail_main/
-        .claude/                # Sessions Claude
-  logs/
-    nanoclaw.log                # Logs
-```
-
----
-
-# 14. Annexes
-
-## 14.1 Ports utilises
-
-| Port | Service | Agent | Acces |
-|------|---------|-------|-------|
-| 3001 | Credential Proxy | Botti | Docker containers -> host |
-| 3002 | Credential Proxy | Thais | Docker containers -> host |
-| 3003 | Credential Proxy | Sam | Docker containers -> host |
-| 3004 | Credential Proxy | Alan | Docker containers -> host |
-| 3100 | Dashboard | (global) | `http://localhost:3100` |
-
-Note : les ports 3001-3004 sont bindes sur l'interface Docker (`host.docker.internal`) et ne sont pas accessibles depuis l'exterieur.
-
-## 14.2 Variables d'environnement
-
-### Variables dans .env (par instance)
-
-| Variable | Description | Defaut | Exemple |
-|----------|-------------|--------|---------|
-| `ANTHROPIC_API_KEY` | Cle API Anthropic (lu par le credential proxy uniquement) | - | `sk-ant-api03-...` |
-| `CLAUDE_MODEL` | Modele Claude a utiliser | - | `claude-opus-4-6` |
-| `ASSISTANT_NAME` | Nom de l'agent (trigger pattern) | `Andy` | `Botti`, `Sam` |
-| `ASSISTANT_HAS_OWN_NUMBER` | L'agent a son propre numero WhatsApp | `false` | `true` (Botti) |
-| `CREDENTIAL_PROXY_PORT` | Port du credential proxy | `3001` | `3003` |
-| `CONTAINER_PREFIX` | Prefixe des containers Docker | `nanoclaw` | `nanoclaw-sam` |
-| `GMAIL_MCP_DIR` | Repertoire des credentials Gmail | `~/.gmail-mcp` | `~/.gmail-mcp-sam` |
-| `GOOGLE_CHAT_ENABLED` | Active le channel Google Chat | `false` | `true` |
-| `GOOGLE_CHAT_AGENT_NAME` | Nom de l'agent dans le Chat Gateway | `nanoclaw` | `sam` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Chemin du service account Firebase | - | `~/.firebase-mcp/adp-service-account.json` |
-| `GMAIL_WEBHOOK_ENABLED` | Active le polling Firestore pour les signaux Gmail | `false` | `true` |
-
-### Variables dans le plist (EnvironmentVariables)
-
-Les variables ci-dessus sont dupliquees dans le plist pour les services launchd. Le plist a priorite sur le .env pour les variables suivantes :
-
-- `PATH` : chemin des binaires (Node.js, Docker, gcloud)
-- `HOME` : repertoire home de l'utilisateur
-- Les variables `CREDENTIAL_PROXY_PORT`, `GMAIL_MCP_DIR`, `GOOGLE_*`
-
-### Variables systeme (pas dans .env)
-
-| Variable | Description | Defaut |
-|----------|-------------|--------|
-| `POLL_INTERVAL` | Intervalle de polling messages (ms) | `2000` |
-| `SCHEDULER_POLL_INTERVAL` | Intervalle du scheduler (ms) | `60000` |
-| `CONTAINER_TIMEOUT` | Timeout container (ms) | `1800000` (30 min) |
-| `IDLE_TIMEOUT` | Timeout inactivite (ms) | `1800000` (30 min) |
-| `CONTAINER_MAX_OUTPUT_SIZE` | Taille max output container (bytes) | `10485760` (10 MB) |
-| `MAX_CONCURRENT_CONTAINERS` | Max containers simultanes | `5` |
-| `IPC_POLL_INTERVAL` | Intervalle IPC (ms) | `1000` |
-| `DAILY_API_LIMIT_USD` | Limite depenses API/jour | `20` |
-| `REMOTE_CONTROL_PIN` | PIN pour le remote control | (vide = desactive) |
-| `DASHBOARD_PORT` | Port du dashboard | `3100` |
-| `TZ` | Fuseau horaire | (systeme) |
-
-### Variables Botti Voice (Cloud Run)
-
-| Variable | Description |
-|----------|-------------|
-| `GEMINI_API_KEY` | Cle API Gemini |
-| `GEMINI_MODEL` | Modele Gemini |
-| `GOOGLE_CLIENT_ID` | OAuth client ID (web) |
-| `GOOGLE_CLIENT_SECRET` | OAuth client secret (web) |
-| `GOOGLE_REFRESH_TOKEN` | Refresh token pour Workspace |
-| `GOOGLE_CLIENT_ID_OAUTH` | OAuth client ID (installed) |
-| `GOOGLE_CLIENT_SECRET_OAUTH` | OAuth client secret (installed) |
-| `SESSION_SECRET` | Secret pour les sessions |
-| `BOTTI_PIN` | PIN d'acces optionnel |
-| `GMAIL_WEBHOOK_ACCOUNTS` | JSON des comptes Gmail pour webhooks |
-| `CHAT_WEBHOOK_ACCOUNTS` | JSON des comptes Chat pour webhooks |
-| `CALENDAR_WEBHOOK_ACCOUNTS` | JSON des comptes Calendar pour webhooks |
-| `CALENDAR_WEBHOOK_URL` | URL callback Calendar |
-| `AGENT_HUB_URL` | URL du service Agent Hub |
-| `AGENT_HUB_API_KEY` | Cle API Agent Hub |
-
-### Variables Chat Gateway (Cloud Run)
-
-| Variable | Description |
-|----------|-------------|
-| `CHAT_VERIFICATION_TOKEN` | Token de verification Google Chat |
-| `ADMIN_API_KEY` | Cle API admin (mapping spaces) |
-
-## 14.3 Structure des fichiers
-
-### Repertoire principal (nanoclaw)
-
-```
-/Users/boty/nanoclaw/
-|-- .env                        # Configuration (secrets + settings)
-|-- package.json                # Dependances npm
-|-- tsconfig.json               # Configuration TypeScript
-|-- CLAUDE.md                   # Instructions pour Claude Code
-|-- README.md                   # Documentation publique
-|
-|-- src/                        # Code source TypeScript
-|   |-- index.ts                # Orchestrateur principal
-|   |-- config.ts               # Configuration (trigger, paths, intervals)
-|   |-- db.ts                   # SQLite (schema, queries)
-|   |-- container-runner.ts     # Spawn containers Docker
-|   |-- container-runtime.ts    # Detection runtime (Docker/Apple Container)
-|   |-- credential-proxy.ts     # Proxy HTTP pour secrets API
-|   |-- message-loop.ts         # Boucle de polling messages
-|   |-- group-queue.ts          # Queue de concurrence par groupe
-|   |-- router.ts               # Formatage messages, routing
-|   |-- task-scheduler.ts       # Execution taches planifiees
-|   |-- ipc.ts                  # Communication inter-processus
-|   |-- remote-control.ts       # Remote control via WhatsApp
-|   |-- sender-allowlist.ts     # Controle d'acces par expediteur
-|   |-- mount-security.ts       # Validation des mounts additionnels
-|   |-- anti-spam.ts            # Protection anti-spam/rate-limit
-|   |-- backoff.ts              # Calcul de backoff exponentiel
-|   |-- logger.ts               # Configuration pino
-|   |-- env.ts                  # Lecture des fichiers .env
-|   |-- types.ts                # Types TypeScript partages
-|   |-- group-folder.ts         # Validation/resolution chemins groupes
-|   |-- channels/
-|   |   |-- index.ts            # Barrel import (enregistrement auto)
-|   |   |-- registry.ts         # Registre des channels
-|   |   |-- whatsapp.ts         # Channel WhatsApp (Baileys)
-|   |   |-- gmail.ts            # Channel Gmail
-|   |   |-- google-chat.ts      # Channel Google Chat
-|
-|-- container/                  # Configuration Docker
-|   |-- Dockerfile              # Image agent
-|   |-- build.sh                # Script de construction
-|   |-- agent-runner/           # Code qui tourne DANS le container
-|   |   |-- src/                # TypeScript
-|   |   |-- package.json
-|   |-- skills/                 # Skills synchronisees dans les containers
-|       |-- agent-browser/      # Navigation web (Chromium)
-|
-|-- groups/                     # Memoire par groupe
-|   |-- whatsapp_main/
-|   |   |-- CLAUDE.md           # Identite/memoire de Botti
-|   |-- global/
-|       |-- CLAUDE.md           # Memoire globale
-|
-|-- store/                      # Donnees persistantes
-|   |-- messages.db             # Base SQLite
-|   |-- auth/                   # Credentials WhatsApp
-|   |-- daily-spend.json        # Tracking depenses API
-|
-|-- data/                       # Donnees temporaires/sessions
-|   |-- sessions/               # Sessions Claude par groupe
-|   |-- ipc/                    # IPC par groupe
-|
-|-- logs/                       # Fichiers de log
-|   |-- nanoclaw.log            # Logs stdout (JSON)
-|   |-- nanoclaw.error.log      # Logs stderr
-|
-|-- botti-voice/                # Service Botti Voice (Python)
-|   |-- web/
-|       |-- server.py           # Serveur FastAPI
-|       |-- gemini_bridge.py    # Pont Gemini Live
-|       |-- config.py           # Configuration + prompts
-|       |-- workspace.py        # Client Gmail/Calendar/Drive
-|       |-- auth.py             # Authentification OAuth
-|       |-- gmail_webhook.py    # Handler webhook Gmail
-|       |-- chat_webhook.py     # Handler webhook Chat
-|       |-- calendar_webhook.py # Handler webhook Calendar
-|       |-- static/             # Frontend web
-|
-|-- chat-gateway/               # Service Chat Gateway (Python)
-|   |-- server.py               # Serveur FastAPI
-|
-|-- dashboard/                  # Dashboard monitoring
-|   |-- server.cjs              # Serveur HTTP
-|   |-- index.html              # Frontend
-|
-|-- create-agent.sh             # Script creation d'agent
-|-- deploy.sh                   # Script de deploiement
-|-- docs/                       # Documentation
-```
-
-### Repertoire d'une instance secondaire (nanoclaw-sam)
-
-```
-/Users/boty/nanoclaw-sam/
-|-- .env                        # Config specifique Sam
-|-- dist/                       # COPIE du code compile (pas symlink)
-|-- container -> ../nanoclaw/container    # Symlink
-|-- node_modules -> ../nanoclaw/node_modules  # Symlink
-|-- package.json -> ../nanoclaw/package.json  # Symlink
-|-- src -> ../nanoclaw/src                    # Symlink
-|-- groups/
-|   |-- gmail_main/
-|       |-- CLAUDE.md           # Identite/memoire de Sam
-|-- store/
-|   |-- messages.db             # Base SQLite de Sam
-|-- data/
-|   |-- sessions/
-|-- logs/
-    |-- nanoclaw.log
-    |-- nanoclaw.error.log
-```
-
-## 14.4 Schema base de donnees (diagramme)
-
-```
-+-------------------+     +---------------------+
-|     chats         |     |     messages         |
-+-------------------+     +---------------------+
-| jid (PK)          |<----| id (PK)             |
-| name              |     | chat_jid (PK, FK)   |
-| last_message_time |     | sender              |
-| channel           |     | sender_name         |
-| is_group          |     | content             |
-+-------------------+     | timestamp           |
-                          | is_from_me          |
-                          | is_bot_message      |
-                          +---------------------+
-
-+-------------------+     +---------------------+
-| registered_groups |     |  scheduled_tasks     |
-+-------------------+     +---------------------+
-| jid (PK)          |     | id (PK)             |
-| name              |     | group_folder        |
-| folder (UNIQUE)   |     | chat_jid            |
-| trigger_pattern   |     | prompt              |
-| added_at          |     | schedule_type       |
-| container_config  |     | schedule_value      |
-| requires_trigger  |     | context_mode        |
-| is_main           |     | next_run            |
-+-------------------+     | last_run            |
-                          | last_result         |
-                          | status              |
-                          | created_at          |
-                          +---------------------+
-                                   |
-                          +---------------------+
-                          | task_run_logs        |
-                          +---------------------+
-                          | id (PK, AUTO)        |
-                          | task_id (FK)         |
-                          | run_at               |
-                          | duration_ms          |
-                          | status               |
-                          | result               |
-                          | error                |
-                          +---------------------+
-
-+-------------------+     +---------------------+
-| router_state      |     | sessions             |
-+-------------------+     +---------------------+
-| key (PK)          |     | group_folder (PK)   |
-| value             |     | session_id          |
-+-------------------+     +---------------------+
-```
-
-## 14.5 Firestore collections (structure)
-
-```
-firestore/
-|
-|-- gmail-notify/                    # Signaux webhook Gmail
-|   |-- botti/
-|   |   |-- signals/
-|   |       |-- <auto-id>/
-|   |           |-- processed: false
-|   |           |-- timestamp: "..."
-|   |-- sam/
-|   |   |-- signals/
-|   |       |-- ...
-|   |-- thais/
-|   |-- alan/
-|
-|-- chat-queue/                      # Queue messages Google Chat
-|   |-- botti/
-|   |   |-- messages/
-|   |       |-- <auto-id>/
-|   |           |-- spaceId: "spaces/XXX"
-|   |           |-- spaceName: "Nom du space"
-|   |           |-- text: "Le message"
-|   |           |-- senderName: "Ahmed"
-|   |           |-- senderEmail: "ahmed@..."
-|   |           |-- createTime: "..."
-|   |           |-- processed: false
-|   |           |-- yacinePresent: true
-|   |-- sam/
-|   |-- thais/
-|   |-- alan/
-|
-|-- chat-config/                     # Configuration Chat
-    |-- space-mapping/
-        |-- "spaces/XXX": "sam"
-        |-- "spaces/YYY": "thais"
-```
-
-## 14.6 Flux complet d'un message (sequence detaillee)
-
-### Cas : message WhatsApp "@Botti check my emails"
-
-```
-1. WhatsApp Servers
-   -> WebSocket Signal Protocol
-   -> Baileys (Node.js)
-   -> Event: messages.upsert
-
-2. WhatsApp Channel (whatsapp.ts)
-   -> Extrait: sender, content, timestamp
-   -> Appelle onMessage(chatJid, msg)
-
-3. Index.ts channelOpts.onMessage
-   -> Sender allowlist check
-   -> storeMessage(msg) -> SQLite messages table
-   -> storeChatMetadata() -> SQLite chats table
-
-4. Message Loop (message-loop.ts)
-   -> Polling toutes les 2000ms
-   -> getNewMessages(jids, lastTimestamp)
-   -> Detecte le message dans whatsapp_main
-   -> queue.enqueueMessageCheck(chatJid)
-
-5. Group Queue (group-queue.ts)
-   -> Verifie concurrence (< 5 containers)
-   -> Appelle processGroupMessages(chatJid)
-
-6. processGroupMessages (index.ts)
-   -> getMessagesSince(chatJid, sinceTimestamp)
-   -> Verifie trigger: TRIGGER_PATTERN.test("@Botti check my emails") = true
-   -> formatMessages(messages, timezone)
-   -> Cree le prompt texte
-
-7. runAgent (index.ts)
-   -> writeTasksSnapshot (taches pour le container)
-   -> writeGroupsSnapshot (groupes pour le container)
-   -> runContainerAgent(group, input, ...)
-
-8. Container Runner (container-runner.ts)
-   -> buildVolumeMounts(group, isMain)
-   -> buildContainerArgs(mounts, containerName)
-   -> spawn("docker", ["run", "-i", "--rm", ...])
-   -> Ecrit le prompt JSON sur stdin
-   -> Parse stdout pour les resultats
-
-9. Container Docker
-   -> agent-runner demarre
-   -> Lit stdin (prompt JSON)
-   -> Lance Claude Code (claude-code SDK)
-   -> Claude lit le CLAUDE.md
-   -> Claude traite "check my emails"
-   -> Claude utilise gws CLI: gws gmail +triage
-   -> Claude formate la reponse
-   -> Ecrit le resultat sur stdout
-
-10. Container Runner
-    -> Parse stdout: ---NANOCLAW_OUTPUT_START--- ... ---NANOCLAW_OUTPUT_END---
-    -> Extrait le result JSON
-    -> Appelle onOutput callback
-
-11. processGroupMessages callback
-    -> Filtre les tags <internal>
-    -> Verifie si c'est une erreur rate-limit
-    -> channel.sendMessage(chatJid, text)
-
-12. WhatsApp Channel
-    -> sock.sendMessage(chatJid, { text })
-    -> Message envoye via WhatsApp
-
-13. Cleanup
-    -> Session Claude sauvegardee (setSession)
-    -> Cursor avance (lastAgentTimestamp)
-    -> saveState() -> SQLite router_state
-    -> Container supprime (--rm)
-```
-
-## 14.7 Glossaire
-
-| Terme | Definition |
-|-------|-----------|
-| **Agent** | Instance de NanoClaw avec sa propre identite, memoire et channels |
-| **Channel** | Source de messages (WhatsApp, Gmail, Google Chat) |
-| **Group** | Conversation ou contexte isole (ex: whatsapp_main, gmail_main) |
-| **Main group** | Groupe principal de l'agent (admin, recoit tous les emails/chats) |
-| **Container** | Instance Docker ephemere ou Claude Code s'execute |
-| **Credential proxy** | Serveur HTTP local qui injecte les secrets API |
-| **CLAUDE.md** | Fichier de memoire/identite lu automatiquement par Claude Code |
-| **Session** | Conversation Claude persistante (reprise entre invocations) |
-| **Trigger** | Motif qui declenche l'agent (ex: @Botti, @Sam) |
-| **IPC** | Communication inter-processus via le filesystem |
-| **Barge-in** | Interruption de la reponse vocale quand l'utilisateur parle |
-| **Swarm** | Equipe de sous-agents collaborant sur une tache complexe |
-| **Skill** | Modification guidee du codebase (ex: /add-telegram) |
-| **agent-runner** | Code TypeScript qui orchestre Claude dans le container |
-| **gws** | Google Workspace CLI (Gmail, Calendar, Drive, Sheets, Docs) |
-| **Baileys** | Librairie Node.js implementant le protocole WhatsApp Web |
-| **pino** | Librairie de logging JSON pour Node.js |
-
----
-
-*Document genere le 31 mars 2026. Pour toute question, contacter Yacine Bakouche (yacine@bestoftours.co.uk) ou ouvrir une session Claude Code dans le repertoire NanoClaw.*
+*Document genere le 4 avril 2026 par Claude Code pour Botler 360 SAS.*
+*Version du systeme : NanoClaw v2.0.0*
