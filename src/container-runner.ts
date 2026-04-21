@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Botler 360 SAS. All rights reserved.
+// See LICENSE.md for license terms.
+
 /**
  * Container Runner for NanoClaw
  * Spawns agent execution in containers and handles IPC
@@ -188,13 +191,13 @@ function buildVolumeMounts(
   }
 
   // Google Workspace CLI credentials (for gws MCP inside the container)
-  // Read-only: token refresh happens outside containers via credential proxy
+  // Writable: gws CLI manages its own OAuth token refresh inside the container
   const gwsDir = path.join(homeDir, '.config', 'gws');
   if (fs.existsSync(gwsDir)) {
     mounts.push({
       hostPath: gwsDir,
       containerPath: '/home/node/.config/gws',
-      readonly: true,
+      readonly: false,
     });
   }
 
@@ -567,7 +570,7 @@ export async function runContainerAgent(
         logLines.push(
           `=== Input Summary ===`,
           `Prompt length: ${input.prompt.length} chars`,
-          `Session ID: ${input.sessionId || 'new'}`,
+          `Session ID: ${input.sessionId ? input.sessionId.slice(0, 8) + '...' : 'new'}`,
           ``,
           `=== Mounts ===`,
           mounts

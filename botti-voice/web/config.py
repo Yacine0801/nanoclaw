@@ -1,5 +1,6 @@
 import os
 import logging
+from typing import Optional
 from dotenv import load_dotenv
 from google.genai import types
 
@@ -26,7 +27,7 @@ VOICE_PREAMBLE = """Tu es en mode vocal.
 - Pas de markdown en vocal — tu parles, tu ne rédiges pas."""
 
 
-def load_agent_memory(agent_name: str) -> str | None:
+def load_agent_memory(agent_name: str) -> Optional[str]:
     """Load CLAUDE.md for the given agent from NanoClaw group folder."""
     path = NANOCLAW_MEMORY_PATHS.get(agent_name)
     if not path:
@@ -59,11 +60,11 @@ RECEIVE_SAMPLE_RATE = 24000
 WORKSPACE_FUNCTIONS = [
     types.FunctionDeclaration(
         name="search_emails",
-        description="Chercher des emails dans Gmail. Utilise la syntaxe de recherche Gmail (from:, subject:, after:, etc.)",
+        description="Chercher des emails dans Gmail (boîte de yacine@bestoftours.co.uk). Syntaxe Gmail : from:, subject:, after:YYYY/MM/DD, newer_than:1h, is:unread, etc. IMPORTANT : pour les emails récents, utilise 'newer_than:2h' ou 'newer_than:1d' plutôt que 'after:' qui ignore l'heure. Fuseau Europe/Paris.",
         parameters=types.Schema(
             type="OBJECT",
             properties={
-                "query": types.Schema(type="STRING", description="Requête de recherche Gmail"),
+                "query": types.Schema(type="STRING", description="Requête de recherche Gmail. Ex: 'newer_than:2h' pour les 2 dernières heures, 'is:unread' pour non lus, 'from:eline' pour les emails d'Eline"),
                 "max_results": types.Schema(type="INTEGER", description="Nombre max de résultats (défaut 5)"),
             },
             required=["query"],

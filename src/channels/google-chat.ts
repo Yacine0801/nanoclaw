@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Botler 360 SAS. All rights reserved.
+// See LICENSE.md for license terms.
+
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -7,7 +10,9 @@ import { google } from 'googleapis';
 import { GoogleAuth } from 'google-auth-library';
 
 import { calculateBackoff } from '../backoff.js';
+import { GOOGLE_CHAT_POLL_MS } from '../constants.js';
 import { logger } from '../logger.js';
+import { observeHistogram } from '../metrics.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -63,7 +68,10 @@ export class GoogleChatChannel implements Channel {
   private lastDeliveredSpaceName = '';
   private spaceIdToName = new Map<string, string>();
 
-  constructor(opts: GoogleChatChannelOpts, pollIntervalMs = 5000) {
+  constructor(
+    opts: GoogleChatChannelOpts,
+    pollIntervalMs = GOOGLE_CHAT_POLL_MS,
+  ) {
     this.opts = opts;
     this.pollIntervalMs = pollIntervalMs;
   }
@@ -193,6 +201,7 @@ export class GoogleChatChannel implements Channel {
 
   private async pollForMessages(): Promise<void> {
     if (!this.firestore) return;
+    const start = Date.now();
 
     try {
       const collectionPath = `chat-queue/${AGENT_NAME}/messages`;
@@ -234,6 +243,11 @@ export class GoogleChatChannel implements Channel {
           nextPollMs: backoffMs,
         },
         'Google Chat poll failed',
+      );
+    } finally {
+      observeHistogram(
+        'nanoclaw_gchat_poll_duration_seconds',
+        (Date.now() - start) / 1000,
       );
     }
   }

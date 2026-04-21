@@ -1,13 +1,18 @@
+// Copyright (c) 2026 Botler 360 SAS. All rights reserved.
+// See LICENSE.md for license terms.
+
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { Firestore } from '@google-cloud/firestore';
 import { google, gmail_v1 } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
 
 // isMain flag is used instead of MAIN_GROUP_FOLDER constant
 import { calculateBackoff } from '../backoff.js';
 import { logger } from '../logger.js';
+import { incCounter, observeHistogram } from '../metrics.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
@@ -15,6 +20,19 @@ import {
   OnInboundMessage,
   RegisteredGroup,
 } from '../types.js';
+
+import {
+  FIRESTORE_SIGNAL_POLL_MS,
+  GMAIL_WEBHOOK_FALLBACK_POLL_MS,
+  GMAIL_ALLOWLIST_CACHE_TTL_MS,
+} from '../constants.js';
+
+// Firestore webhook signal polling config
+const GMAIL_WEBHOOK_ENABLED = process.env.GMAIL_WEBHOOK_ENABLED === 'true';
+const AGENT_NAME = process.env.GOOGLE_CHAT_AGENT_NAME || 'nanoclaw';
+const SERVICE_ACCOUNT_PATH =
+  process.env.GOOGLE_APPLICATION_CREDENTIALS ||
+  path.join(os.homedir(), '.firebase-mcp', 'adp-service-account.json');
 
 // --- Gmail send allowlist config (external JSON with cache) ---
 
@@ -41,7 +59,7 @@ const GMAIL_ALLOWLIST_DEFAULTS: GmailSendAllowlistConfig = {
   cc_email: 'yacine@bestoftours.co.uk',
 };
 
-const GMAIL_ALLOWLIST_CACHE_TTL_MS = 60_000;
+// GMAIL_ALLOWLIST_CACHE_TTL_MS imported from constants.ts
 let _gmailAllowlistCache: GmailSendAllowlistConfig | null = null;
 let _gmailAllowlistCacheTs = 0;
 
@@ -144,9 +162,16 @@ export class GmailChannel implements Channel {
   private userEmail = '';
   private lastDeliveredThreadId = '';
 
-  constructor(opts: GmailChannelOpts, pollIntervalMs = 60000) {
+  // Firestore webhook signal polling
+  private firestore: Firestore | null = null;
+  private signalTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(opts: GmailChannelOpts, pollIntervalMs?: number) {
     this.opts = opts;
-    this.pollIntervalMs = pollIntervalMs;
+    // When webhook signals are enabled, use longer fallback interval for Gmail API polling
+    this.pollIntervalMs =
+      pollIntervalMs ??
+      (GMAIL_WEBHOOK_ENABLED ? GMAIL_WEBHOOK_FALLBACK_POLL_MS : 60_000);
   }
 
   async connect(): Promise<void> {
@@ -212,6 +237,11 @@ export class GmailChannel implements Channel {
     // Initial poll
     await this.pollForMessages();
     schedulePoll();
+
+    // Start Firestore signal polling if webhook mode enabled
+    if (GMAIL_WEBHOOK_ENABLED) {
+      this.initFirestoreSignalPoller();
+    }
   }
 
   private isDirectSendAllowed(recipientEmail: string): boolean {
@@ -302,6 +332,57 @@ export class GmailChannel implements Channel {
       }
     } else {
       // External recipient: create draft + send notification to yacine@
+
+      // Hardware-level safety: refuse drafts to system/billing/noreply
+      // recipients regardless of prompt behavior. Matches
+      // DRAFT_BLOCKLIST_PATTERNS — prevents prompt hallucinations from
+      // leaking internal data to automated endpoints.
+      const blockedPattern = this.isDraftRecipientBlocked(meta.sender);
+      if (blockedPattern) {
+        logger.error(
+          {
+            to: meta.sender,
+            threadId,
+            pattern: blockedPattern,
+            bodyPreview: text.slice(0, 300),
+          },
+          'BLOCKED: refusing agent draft to blocklisted recipient',
+        );
+        incCounter('nanoclaw_drafts_blocked_total', { pattern: blockedPattern });
+        try {
+          const alertHeaders = [
+            `To: ${allowlistCfg.notify_email}`,
+            `From: ${this.userEmail}`,
+            `Subject: [BLOCKED DRAFT] Agent attempted draft to ${meta.sender}`,
+            'Content-Type: text/plain; charset=utf-8',
+            '',
+            `The agent attempted to create a Gmail draft that was blocked by the hardware-level filter.\n\n` +
+              `Recipient: ${meta.sender}\n` +
+              `Matched blocklist pattern: ${blockedPattern}\n` +
+              `Thread ID: ${threadId}\n` +
+              `Agent: ${this.userEmail}\n\n` +
+              `Body preview:\n${text.slice(0, 500)}\n\n` +
+              `The draft was NOT created. Review the agent prompt or the blocklist if this is a false positive.`,
+          ].join('\r\n');
+          const encodedAlert = Buffer.from(alertHeaders)
+            .toString('base64')
+            .replace(/\+/g, '-')
+            .replace(/\//g, '_')
+            .replace(/=+$/, '');
+          await this.gmail.users.messages.send({
+            userId: 'me',
+            requestBody: { raw: encodedAlert },
+          });
+          logger.info(
+            { to: allowlistCfg.notify_email, blockedFor: meta.sender, pattern: blockedPattern },
+            'Block-alert notification sent',
+          );
+        } catch (notifyErr) {
+          logger.warn({ err: notifyErr }, 'Failed to send block-alert notification');
+        }
+        return;
+      }
+
       const headers = [
         `To: ${meta.sender}`,
         `From: ${this.userEmail}`,
@@ -377,9 +458,92 @@ export class GmailChannel implements Channel {
       clearTimeout(this.pollTimer);
       this.pollTimer = null;
     }
+    if (this.signalTimer) {
+      clearTimeout(this.signalTimer);
+      this.signalTimer = null;
+    }
+    if (this.firestore) {
+      await this.firestore.terminate();
+      this.firestore = null;
+    }
     this.gmail = null;
     this.oauth2Client = null;
     logger.info('Gmail channel stopped');
+  }
+
+  // --- Firestore webhook signal polling ---
+
+  private initFirestoreSignalPoller(): void {
+    if (!fs.existsSync(SERVICE_ACCOUNT_PATH)) {
+      logger.warn(
+        { path: SERVICE_ACCOUNT_PATH },
+        'Gmail webhook: service account not found, Firestore signal polling disabled',
+      );
+      return;
+    }
+
+    try {
+      this.firestore = new Firestore({
+        keyFilename: SERVICE_ACCOUNT_PATH,
+      });
+      logger.info(
+        { agent: AGENT_NAME, intervalMs: FIRESTORE_SIGNAL_POLL_MS },
+        'Gmail webhook signal polling enabled (Firestore)',
+      );
+    } catch (err) {
+      logger.warn({ err }, 'Failed to init Firestore for Gmail signals');
+      return;
+    }
+
+    const scheduleSignalPoll = () => {
+      this.signalTimer = setTimeout(() => {
+        this.checkFirestoreSignals()
+          .catch((err) =>
+            logger.error({ err }, 'Gmail Firestore signal poll error'),
+          )
+          .finally(() => {
+            if (this.firestore) scheduleSignalPoll();
+          });
+      }, FIRESTORE_SIGNAL_POLL_MS);
+    };
+
+    scheduleSignalPoll();
+  }
+
+  private async checkFirestoreSignals(): Promise<void> {
+    if (!this.firestore) return;
+    const start = Date.now();
+
+    try {
+      const collectionPath = `gmail-notify/${AGENT_NAME}/signals`;
+      const snapshot = await this.firestore
+        .collection(collectionPath)
+        .where('processed', '==', false)
+        .limit(10)
+        .get();
+
+      if (snapshot.empty) return;
+
+      logger.info(
+        { count: snapshot.size, agent: AGENT_NAME },
+        'Gmail webhook signal(s) received, triggering poll',
+      );
+
+      // Trigger an immediate Gmail API poll
+      await this.pollForMessages();
+
+      // Mark signals as processed
+      const batch = this.firestore.batch();
+      for (const doc of snapshot.docs) {
+        batch.update(doc.ref, { processed: true });
+      }
+      await batch.commit();
+    } finally {
+      observeHistogram(
+        'nanoclaw_firestore_signal_check_seconds',
+        (Date.now() - start) / 1000,
+      );
+    }
   }
 
   // --- Private ---
@@ -390,6 +554,7 @@ export class GmailChannel implements Channel {
 
   private async pollForMessages(): Promise<void> {
     if (!this.gmail) return;
+    const start = Date.now();
 
     try {
       const query = this.buildQuery();
@@ -434,6 +599,11 @@ export class GmailChannel implements Channel {
         },
         'Gmail poll failed',
       );
+    } finally {
+      observeHistogram(
+        'nanoclaw_gmail_poll_duration_seconds',
+        (Date.now() - start) / 1000,
+      );
     }
   }
 
@@ -468,9 +638,11 @@ export class GmailChannel implements Channel {
     if (senderEmail === this.userEmail) return;
 
     // Skip automated/marketing emails before spawning an agent
-    if (this.isAutomatedEmail(senderEmail, headers)) {
+    const filterReason = this.isAutomatedEmail(senderEmail, subject, headers);
+    if (filterReason) {
+      incCounter('nanoclaw_emails_filtered_total', { reason: filterReason });
       logger.debug(
-        { messageId, from: senderEmail, subject },
+        { messageId, from: senderEmail, subject, reason: filterReason },
         'Skipping automated/marketing email',
       );
       return;
@@ -544,6 +716,35 @@ export class GmailChannel implements Channel {
 
   // ---- Email filtering ----
 
+  // Leading Re:/Fwd:/Tr:/etc. prefix tokens — used to strip and count nesting.
+  private static SUBJECT_PREFIX_RE = /^(\s*(?:re|r[eé]f?|fwd?|fw|tr|aw|wg|sv|vs|antw)\s*:\s*)+/i;
+
+  // Subject phrases that reliably indicate an auto-reply / OOO, matched after
+  // the reply/forward prefix chain has been stripped. Keep anchored to the
+  // start of the core subject to avoid false positives on legit mail that
+  // merely mentions "absence" or "out of office" inside a longer subject.
+  private static AUTO_REPLY_SUBJECT_PATTERNS: RegExp[] = [
+    /^automatic\s+reply\b/i,
+    /^auto[- ]?reply\b/i,
+    /^autoresponse\b/i,
+    /^auto[- ]?response\b/i,
+    /^r[eé]ponse\s+automatique\b/i,
+    /^automatische\s+antwort\b/i,
+    /^out\s+of\s+(the\s+)?office\b/i,
+    /^absent\s+du\s+bureau\b/i,
+    /^hors\s+du?\s+bureau\b/i,
+    /^en\s+cong[eé]s?\b/i,
+    /^\[?oof\]?\b/i,
+    /^\[?ooo\]?\b/i,
+    /^\[?out\s+of\s+office\]?\b/i,
+    // Our own "[SENT] Name:" marker coming back through the inbox — if the
+    // agent replied to this, we'd loop with our own sent-prefix.
+    /^\[sent\]/i,
+    // Internal deploy / CI notifications — must never receive agent replies
+    /^\[WebDeploy\]/i,
+    /^\[Draft pending\]/i,
+  ];
+
   // Sender prefixes that indicate automated/noreply emails
   private static NOREPLY_PREFIXES = [
     'noreply@',
@@ -557,6 +758,7 @@ export class GmailChannel implements Channel {
     'notification@',
     'alert@',
     'alerts@',
+    'comments-noreply@',
   ];
 
   // Known marketing/bulk email sender domains
@@ -580,12 +782,92 @@ export class GmailChannel implements Channel {
     'drip.com',
     'getresponse.com',
     'activecampaign.com',
+    'hes.scot',
+    'e.eurostar.com',
   ];
 
+  /**
+   * Recipients for which agent-created drafts are ALWAYS refused.
+   * Hardware-level safety: regardless of what the agent's system prompt
+   * says, a draft to any of these addresses is blocked before reaching
+   * Gmail's drafts.create API — prevents accidental data leaks to
+   * billing / automated / system endpoints when an agent hallucinates
+   * a wrong recipient thread.
+   */
+  private static DRAFT_BLOCKLIST_PATTERNS: RegExp[] = [
+    // Automated / bounce / system senders
+    /^noreply@/i,
+    /^no-reply@/i,
+    /^no_reply@/i,
+    /^donotreply@/i,
+    /^do-not-reply@/i,
+    /^mailer-daemon@/i,
+    /^postmaster@/i,
+    /^automated@/i,
+    /^notifications?@/i,
+    /^alerts?@/i,
+    /^billing@/i,
+    /^invoice[+@]/i,
+    /^statements?[+@]/i,
+    /^receipt[+@]/i,
+    /^chat-noreply@/i,
+    // SaaS / infra vendors — never legitimate agent reply targets
+    /@stripe\.com$/i,
+    /@anthropic\.com$/i,
+    /@openai\.com$/i,
+    /@google\.com$/i,
+    /@googlemail\.com$/i,
+    /@googleapis\.com$/i,
+    /@accounts\.google\.com$/i,
+    /@amazon\.com$/i,
+    /@amazonaws\.com$/i,
+    /@amazonses\.com$/i,
+    /@aws\.amazon\.com$/i,
+    /@github\.com$/i,
+    /@gitlab\.com$/i,
+    /@atlassian\.com$/i,
+    /@slack\.com$/i,
+    /@notion\.so$/i,
+    /@linear\.app$/i,
+    /@vercel\.com$/i,
+    /@cloudflare\.com$/i,
+    /@firebase\.google\.com$/i,
+    // Transport / partenaires qui créent des loops OOO
+    /@e\.eurostar\.com$/i,
+    /@hes\.scot$/i,
+    // Aliases internes système (NON-humains) — agents ne doivent jamais écrire
+    // à ces destinataires. La communication avec l'équipe humaine
+    // (yacine@, ahmed@, eline@, etc.) reste autorisée.
+    /^charissa@bestoftours\.co\.uk$/i,
+  ];
+
+  /**
+   * Return the matched pattern source if the email is on the draft
+   * blocklist, null if allowed. Hardware-level safety check used before
+   * any agent-driven Gmail draft — independent of the agent's prompt.
+   */
+  private isDraftRecipientBlocked(email: string): string | null {
+    const lower = (email || '').toLowerCase();
+    for (const pat of GmailChannel.DRAFT_BLOCKLIST_PATTERNS) {
+      if (pat.test(lower)) return pat.source;
+    }
+    return null;
+  }
+
+  /**
+   * Check if an email is automated/marketing/auto-reply.
+   * Returns the filter reason string if filtered, or null if not filtered.
+   *
+   * Auto-reply / OOO detection is critical: without it, an agent that
+   * creates a draft on every inbound email will trigger Exchange/Gmail
+   * OOO rules repeatedly and enter an infinite reply loop with itself
+   * (real incident — see BALISE / Romy container, 2026-04-20).
+   */
   private isAutomatedEmail(
     senderEmail: string,
+    subject: string,
     headers: Array<{ name?: string | null; value?: string | null }>,
-  ): boolean {
+  ): string | null {
     const email = senderEmail.toLowerCase();
     const getHeader = (name: string) =>
       headers.find((h) => h.name?.toLowerCase() === name.toLowerCase())
@@ -595,38 +877,78 @@ export class GmailChannel implements Channel {
     if (
       GmailChannel.NOREPLY_PREFIXES.some((prefix) => email.startsWith(prefix))
     ) {
-      return true;
+      return 'noreply';
     }
 
     // 2. Known marketing sender domains
     const domain = email.split('@')[1] || '';
     if (GmailChannel.MARKETING_DOMAINS.some((d) => domain.endsWith(d))) {
-      return true;
+      return 'marketing';
     }
 
     // 3. List-Unsubscribe header (strong newsletter signal)
     if (getHeader('List-Unsubscribe')) {
-      return true;
+      return 'newsletter';
     }
 
-    // 4. Precedence: bulk or list (standard header for mailing lists)
+    // 4. Precedence: bulk, list, or auto_reply
     const precedence = getHeader('Precedence').toLowerCase();
-    if (precedence === 'bulk' || precedence === 'list') {
-      return true;
+    if (
+      precedence === 'bulk' ||
+      precedence === 'list' ||
+      precedence === 'auto_reply' ||
+      precedence === 'junk'
+    ) {
+      return precedence === 'auto_reply' ? 'auto_reply' : 'newsletter';
     }
 
-    // 5. Auto-Submitted header (bounces, auto-replies)
+    // 5. Auto-Submitted header (RFC 3834 — bounces, auto-replies, OOO)
     const autoSubmitted = getHeader('Auto-Submitted').toLowerCase();
     if (autoSubmitted && autoSubmitted !== 'no') {
-      return true;
+      return 'auto_reply';
     }
 
-    // 6. X-Mailer or X-Campaign headers (bulk mailers)
+    // 6. Outlook/Exchange-specific OOO headers. Auto-Submitted is often
+    //    missing from legacy Exchange configs, so these catch the gaps.
+    if (
+      getHeader('X-Auto-Response-Suppress') ||
+      getHeader('X-Autoreply') ||
+      getHeader('X-Autorespond') ||
+      getHeader('X-POST-MessageClass').toLowerCase().includes('autoresponse')
+    ) {
+      return 'auto_reply';
+    }
+
+    // 7. Subject phrases that reliably indicate an auto-reply.
+    //    Strip leading Re:/Fwd:/Tr:/etc. prefixes before matching so that
+    //    replies to OOO threads ("Re: Automatic reply: ...") are also caught.
+    const coreSubject = (subject || '')
+      .replace(GmailChannel.SUBJECT_PREFIX_RE, '')
+      .trim();
+    if (
+      coreSubject &&
+      GmailChannel.AUTO_REPLY_SUBJECT_PATTERNS.some((p) => p.test(coreSubject))
+    ) {
+      return 'auto_reply_subject';
+    }
+
+    // 8. Reply-chain loop detection: count leading reply/forward prefix
+    //    tokens. Legitimate human threads rarely stack more than 3 of
+    //    these; ≥4 almost always means two auto-responders ping-ponging.
+    const prefixMatch = (subject || '').match(GmailChannel.SUBJECT_PREFIX_RE);
+    if (prefixMatch) {
+      const tokenCount = (prefixMatch[0].match(/:/g) || []).length;
+      if (tokenCount >= 4) {
+        return 'reply_loop';
+      }
+    }
+
+    // 9. X-Mailer or X-Campaign headers (bulk mailers)
     if (getHeader('X-Campaign-Id') || getHeader('X-Mailchimp-Id')) {
-      return true;
+      return 'marketing';
     }
 
-    return false;
+    return null;
   }
 
   private extractTextBody(

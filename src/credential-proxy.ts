@@ -19,6 +19,23 @@ import path from 'path';
 
 import { readEnvFile } from './env.js';
 import { logger } from './logger.js';
+import {
+  getMetricsText,
+  incCounter,
+  observeHistogram,
+  setGauge,
+} from './metrics.js';
+
+// Health endpoint dependencies (lazy-loaded to avoid circular imports)
+let _healthDeps: {
+  getChannels: () => { name: string }[];
+  getRegisteredGroups: () => Record<string, unknown>;
+  assistantName: string;
+} | null = null;
+
+export function setHealthDeps(deps: typeof _healthDeps): void {
+  _healthDeps = deps;
+}
 
 // --- Daily spend tracking ---
 const DAILY_LIMIT_USD = (() => {
@@ -75,9 +92,75 @@ function saveDailySpend(spend: DailySpend): void {
   }
 }
 
-// Approximate costs per 1M tokens (Sonnet 4.6 / Opus 4.6 blended estimate)
-const INPUT_COST_PER_M = 3.0; // $3/MTok input (blended)
-const OUTPUT_COST_PER_M = 15.0; // $15/MTok output (blended)
+import {
+  INPUT_COST_PER_M,
+  OUTPUT_COST_PER_M,
+  CIRCUIT_BREAKER_THRESHOLD,
+  CIRCUIT_BREAKER_RESET_MS,
+} from './constants.js';
+
+// --- Circuit breaker ---
+type CircuitState = 'closed' | 'open' | 'half-open';
+
+let _cbState: CircuitState = 'closed';
+let _cbFailures = 0;
+let _cbOpenedAt = 0;
+
+function circuitBreakerCheck(): { allowed: boolean } {
+  if (_cbState === 'closed') return { allowed: true };
+
+  if (_cbState === 'open') {
+    if (Date.now() - _cbOpenedAt >= CIRCUIT_BREAKER_RESET_MS) {
+      _cbState = 'half-open';
+      logger.info('Circuit breaker half-open, allowing probe request');
+      return { allowed: true };
+    }
+    return { allowed: false };
+  }
+
+  // half-open: one probe already in-flight, block additional requests
+  return { allowed: false };
+}
+
+function circuitBreakerRecord(statusCode: number): void {
+  if (statusCode >= 500) {
+    _cbFailures++;
+    if (_cbState === 'half-open') {
+      // Probe failed — re-open
+      _cbState = 'open';
+      _cbOpenedAt = Date.now();
+      logger.warn(
+        { failures: _cbFailures },
+        'Circuit breaker re-opened after failed probe',
+      );
+    } else if (_cbFailures >= CIRCUIT_BREAKER_THRESHOLD) {
+      _cbState = 'open';
+      _cbOpenedAt = Date.now();
+      logger.error({ failures: _cbFailures }, 'Circuit breaker opened');
+    }
+  } else {
+    // Success (or 4xx) — reset
+    _cbFailures = 0;
+    if (_cbState === 'half-open') {
+      _cbState = 'closed';
+      logger.info('Circuit breaker closed after successful probe');
+    }
+  }
+}
+
+export function getCircuitBreakerState(): {
+  state: CircuitState;
+  failures: number;
+} {
+  return { state: _cbState, failures: _cbFailures };
+}
+
+/** @internal - for tests only */
+export function _resetCircuitBreakerForTests(): void {
+  _cbState = 'closed';
+  _cbFailures = 0;
+  _cbOpenedAt = 0;
+}
 
 function trackUsage(responseBody: string): void {
   try {
@@ -143,6 +226,49 @@ export function startCredentialProxy(
 
   return new Promise((resolve, reject) => {
     const server = createServer((req, res) => {
+      // Health check endpoint
+      if (req.method === 'GET' && req.url === '/health') {
+        const body = JSON.stringify({
+          status: 'ok',
+          agent: _healthDeps?.assistantName ?? 'unknown',
+          uptime: Math.round(process.uptime()),
+          channels: (_healthDeps?.getChannels() ?? []).map((c) => c.name),
+          groups: Object.keys(_healthDeps?.getRegisteredGroups() ?? {}).length,
+          port,
+          model: process.env.CLAUDE_MODEL || 'unknown',
+          circuitBreaker: getCircuitBreakerState(),
+          timestamp: new Date().toISOString(),
+        });
+        res.writeHead(200, {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(body),
+        });
+        res.end(body);
+        return;
+      }
+
+      // Prometheus metrics endpoint
+      if (req.method === 'GET' && req.url === '/metrics') {
+        // Update dynamic gauges before serving
+        setGauge(
+          'nanoclaw_registered_groups',
+          Object.keys(_healthDeps?.getRegisteredGroups() ?? {}).length,
+        );
+        const cb = getCircuitBreakerState();
+        for (const s of ['closed', 'open', 'half-open'] as const) {
+          setGauge('nanoclaw_circuit_breaker_state', cb.state === s ? 1 : 0, {
+            state: s,
+          });
+        }
+        const metricsBody = getMetricsText();
+        res.writeHead(200, {
+          'content-type': 'text/plain; version=0.0.4; charset=utf-8',
+          'content-length': Buffer.byteLength(metricsBody),
+        });
+        res.end(metricsBody);
+        return;
+      }
+
       const chunks: Buffer[] = [];
       req.on('data', (c) => chunks.push(c));
       req.on('end', () => {
@@ -166,6 +292,28 @@ export function startCredentialProxy(
             }),
           );
           return;
+        }
+
+        // Circuit breaker: block /messages requests when circuit is open
+        if (req.url?.includes('/messages')) {
+          const { allowed } = circuitBreakerCheck();
+          if (!allowed) {
+            incCounter('nanoclaw_api_requests_total', {
+              status: 'circuit_breaker',
+            });
+            res.writeHead(503, { 'content-type': 'application/json' });
+            res.end(
+              JSON.stringify({
+                type: 'error',
+                error: {
+                  type: 'overloaded_error',
+                  message:
+                    'Circuit breaker open — upstream failures detected. Retry later.',
+                },
+              }),
+            );
+            return;
+          }
         }
 
         const headers: Record<string, string | number | string[] | undefined> =
@@ -197,6 +345,7 @@ export function startCredentialProxy(
           }
         }
 
+        const requestStart = Date.now();
         const upstream = makeRequest(
           {
             hostname: upstreamUrl.hostname,
@@ -206,6 +355,17 @@ export function startCredentialProxy(
             headers,
           } as RequestOptions,
           (upRes) => {
+            observeHistogram(
+              'nanoclaw_api_request_duration_seconds',
+              (Date.now() - requestStart) / 1000,
+            );
+            // Record upstream status for circuit breaker (only /messages)
+            if (req.url?.includes('/messages')) {
+              circuitBreakerRecord(upRes.statusCode!);
+              incCounter('nanoclaw_api_requests_total', {
+                status: upRes.statusCode! >= 500 ? 'error' : 'success',
+              });
+            }
             res.writeHead(upRes.statusCode!, upRes.headers);
             // Track token usage from API responses
             const respChunks: Buffer[] = [];
